@@ -1,0 +1,11 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# Local audit/hook state
+.mimosa/
+.zcode/
+
+# Local screenshots and Windows reserved placeholder
+_shot_*.png
+NUL
