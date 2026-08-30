@@ -34,6 +34,7 @@ namespace DesktopBar.UI
         private bool _panelAbove;
         private int _animationVersion;
         private bool _closing;
+        private bool _disposed;
         protected bool Open;
         private static ModuleBase _active;
 
@@ -125,6 +126,11 @@ namespace DesktopBar.UI
         /// <summary>登记正在打开的右键菜单：期间不自动收起面板，菜单关闭后恢复。</summary>
         protected void TrackFlyout(Popup menu)
         {
+            if (menu == null) return;
+            if (_openMenu != null && !ReferenceEquals(_openMenu, menu))
+            {
+                try { _openMenu.IsOpen = false; } catch { }
+            }
             _openMenu = menu;
             _closeTimer.Stop();
             menu.Closed += (s, e) =>
@@ -185,7 +191,7 @@ namespace DesktopBar.UI
 
         public void ShowPanel()
         {
-            if (!HasPanel || !IsVisible || !IsLoaded) return;
+            if (_disposed || !HasPanel || !IsVisible || !IsLoaded) return;
             if (ReferenceEquals(_active, this) && Open && !_closing) return;
             if (_active != null && !ReferenceEquals(_active, this)) _active.HidePanelImmediate();
             _active = this;
@@ -296,6 +302,9 @@ namespace DesktopBar.UI
 
         public virtual void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
+            _animationVersion++;
             _closeTimer.Stop();
             if (ReferenceEquals(_active, this)) _active = null;
             ThemeService.Changed -= OnThemeChanged;

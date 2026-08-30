@@ -31,6 +31,9 @@ namespace DesktopBar
         private MusicModule _music;
         private SpectrumModule _spectrum;
         private ModuleBase _power, _recycle, _volume;
+        private bool _closing;
+        private bool _mediaAvailable = true;
+        private int _layoutVersion;
 
         public MainWindow()
         {
@@ -57,7 +60,11 @@ namespace DesktopBar
             };
 
             _pinTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-            _pinTimer.Tick += (s, e) => PinToDesktopLayer();
+            _pinTimer.Tick += (s, e) =>
+            {
+                if (!_closing && Visibility == Visibility.Visible)
+                    PinToDesktopLayer();
+            };
 
             Loaded += (s, e) =>
             {
@@ -65,6 +72,7 @@ namespace DesktopBar
                 BuildLayout();
                 Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
                 {
+                    if (_closing || Visibility != Visibility.Visible) return;
                     PinToDesktopLayer();
                     _pinTimer.Start();
                 }));
@@ -75,8 +83,12 @@ namespace DesktopBar
             };
             Closed += (s, e) =>
             {
+                _closing = true;
+                _layoutVersion++;
                 _pinTimer.Stop();
                 DisposeModules();
+                try { _media?.Dispose(); } catch { }
+                _media = null;
             };
         }
 
@@ -88,12 +100,15 @@ namespace DesktopBar
 
         public void ApplySettings()
         {
+            if (_closing) return;
             if (CheckAccess()) BuildLayout();
-            else Dispatcher.BeginInvoke(new Action(BuildLayout));
+            else Dispatcher.BeginInvoke(new Action(() => { if (!_closing) BuildLayout(); }));
         }
 
         private void BuildLayout()
         {
+            if (_closing) return;
+            int layoutVersion = ++_layoutVersion;
             DisposeModules();
             Height = 46 * Ui.Scale;
 
@@ -192,6 +207,7 @@ namespace DesktopBar
             WireMedia();
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
+                if (_closing || layoutVersion != _layoutVersion) return;
                 var hwnd = new WindowInteropHelper(this).Handle;
                 if (S.ReserveDesktopSpace)
                     DesktopSpaceService.Apply(S, hwnd);
@@ -211,7 +227,7 @@ namespace DesktopBar
             SetModuleVisibility(_recycle, S.ShowRecycleBin);
             foreach (var fm in _folderModules)
                 SetModuleVisibility(fm, S.ShowFolders);
-            SetModuleVisibility(_music, S.ShowMusic);
+            SetModuleVisibility(_music, S.ShowMusic && _mediaAvailable);
             if (_spectrum != null)
             {
                 _spectrum.Visibility = S.ShowSpectrum ? Visibility.Visible : Visibility.Collapsed;
@@ -232,7 +248,18 @@ namespace DesktopBar
         public void HideWithPanels()
         {
             ClosePanels();
+            _pinTimer.Stop();
             Hide();
+        }
+
+        public new void Show()
+        {
+            base.Show();
+            if (!_closing)
+            {
+                PinToDesktopLayer();
+                _pinTimer.Start();
+            }
         }
 
         private static void SetModuleVisibility(ModuleBase module, bool visible)
@@ -261,7 +288,7 @@ namespace DesktopBar
             if (_media == null)
             {
                 _media = new MediaService(Dispatcher);
-                _media.Start();
+                _ = _media.StartAsync();
             }
             if (_mediaHandler != null) _media.Updated -= _mediaHandler;
             if (_mediaLost != null) _media.SessionLost -= _mediaLost;
@@ -271,11 +298,13 @@ namespace DesktopBar
             {
                 if (music == null || !ReferenceEquals(_music, music)) return;
                 music.Update(info);
-                music.SetSeek(position => _media?.Seek(position));
-                SetModuleVisibility(music, S.ShowMusic);
+                music.SetSeek(position => _ = _media?.SeekAsync(position));
+                _mediaAvailable = info.HasSession;
+                SetModuleVisibility(music, S.ShowMusic && _mediaAvailable);
             };
             _mediaLost = () =>
             {
+                _mediaAvailable = false;
                 if (music != null && ReferenceEquals(_music, music))
                     SetModuleVisibility(music, false);
             };

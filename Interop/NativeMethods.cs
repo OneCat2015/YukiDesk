@@ -26,6 +26,9 @@ namespace DesktopBar.Interop
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cw, int ch);
 
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
+
         [DllImport("user32.dll")]
         private static extern bool SetWindowRgn(IntPtr hwnd, IntPtr rgn, bool redraw);
 
@@ -33,7 +36,8 @@ namespace DesktopBar.Interop
         public static void SetRoundRegion(IntPtr hwnd, int w, int h, int radius)
         {
             IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius);
-            SetWindowRgn(hwnd, rgn, true);
+            if (rgn != IntPtr.Zero && !SetWindowRgn(hwnd, rgn, true))
+                DeleteObject(rgn);
         }
 
         [DllImport("user32.dll")]
@@ -45,7 +49,7 @@ namespace DesktopBar.Interop
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x80;
         private const int WS_EX_NOACTIVATE = 0x08000000;
-        private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
         public static IntPtr FindDesktopHost() => FindWindowW("Progman", null);
@@ -295,9 +299,6 @@ namespace DesktopBar.Interop
         [DllImport("user32.dll")]
         private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO info);
 
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr obj);
-
         /// <summary>HICON → BitmapSource(绕开 .NET8 下 CreateBitmapSourceFromHIcon 的句柄校验 bug)。</summary>
         private static BitmapSource BitmapToSource(IntPtr hBitmap)
         {
@@ -520,8 +521,13 @@ namespace DesktopBar.Interop
 
                 int width = Math.Max(1, data.rc.Right - data.rc.Left);
                 int actualHeight = Math.Max(1, data.rc.Bottom - data.rc.Top);
-                SetWindowPos(hwnd, IntPtr.Zero, data.rc.Left, data.rc.Top, width, actualHeight,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                bool positionedWindow = SetWindowPos(hwnd, IntPtr.Zero, data.rc.Left, data.rc.Top, width, actualHeight,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                if (!positionedWindow)
+                {
+                    App.Log("定位桌面 AppBar 窗口失败 error=" + Marshal.GetLastWin32Error());
+                    return false;
+                }
                 App.Log("桌面 AppBar 已注册 hwnd=" + hwnd + " rect=" +
                     data.rc.Left + "," + data.rc.Top + "," + data.rc.Right + "," + data.rc.Bottom);
                 return true;

@@ -15,6 +15,8 @@ namespace DesktopBar.Models
 
     public class AppSettings
     {
+        /// <summary>配置迁移版本；只对旧配置执行一次兼容转换。</summary>
+        public int SchemaVersion { get; set; } = 2;
         // 顶栏背景仍可独立关闭，以保持桌面点击穿透。
         public string BarBgColor { get; set; } = "#000000";
         public double BarBgOpacity { get; set; } = 0.0;
@@ -45,8 +47,9 @@ namespace DesktopBar.Models
         public bool ShowWeekday { get; set; } = false;
 
         // 小文件夹
-        public string StorageRoot { get; set; } =
-            Path.Combine(System.AppContext.BaseDirectory, "MiniFolders");
+        public string StorageRoot { get; set; } = Path.Combine(
+            System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+            "YukiDesk", "MiniFolders");
         public List<string> Folders { get; set; } = new List<string>();
 
         // 桌面与通用

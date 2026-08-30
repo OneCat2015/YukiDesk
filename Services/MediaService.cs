@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Windows.Foundation;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
 
@@ -25,19 +26,9 @@ namespace DesktopBar.Services
         public bool SeekSupported { get; }
         public BitmapSource Cover { get; }
 
-        public MediaInfo(
-            long generation,
-            bool hasSession,
-            string sessionKey,
-            string trackKey,
-            string thumbnailKey,
-            string title,
-            string artist,
-            BitmapSource cover,
-            bool playing,
-            TimeSpan position,
-            TimeSpan duration,
-            bool seekSupported)
+        public MediaInfo(long generation, bool hasSession, string sessionKey, string trackKey,
+            string thumbnailKey, string title, string artist, BitmapSource cover, bool playing,
+            TimeSpan position, TimeSpan duration, bool seekSupported)
         {
             Generation = generation;
             HasSession = hasSession;
@@ -54,11 +45,8 @@ namespace DesktopBar.Services
         }
     }
 
-    /// <summary>
-    /// 通过系统媒体控制(SMTC)读取后台播放的音乐:QQ音乐/网易云/Spotify/浏览器等均支持。
-    /// 控制按钮通过系统媒体键实现。
-    /// </summary>
-    public class MediaService
+    /// <summary>通过系统媒体控制(SMTC)读取后台播放状态并发布不可变快照。</summary>
+    public sealed class MediaService : IDisposable
     {
         private const ulong MaxCoverBytes = 20_000_000;
 
@@ -70,51 +58,72 @@ namespace DesktopBar.Services
         private long _sessionGeneration;
         private long _refreshGeneration;
         private long _publishedGeneration;
+        private bool _started;
+        private bool _disposed;
         private string _sessionKey = "";
-        private MediaInfo _current = new MediaInfo(0, false, "", "", "", "", "", null, false, TimeSpan.Zero, TimeSpan.Zero, false);
+        private MediaInfo _current = new MediaInfo(0, false, "", "", "", "", "", null,
+            false, TimeSpan.Zero, TimeSpan.Zero, false);
 
-        public event Action<MediaInfo> Updated;   // 已在 UI 线程触发
-        public event Action SessionLost;          // 已在 UI 线程触发
+        private TypedEventHandler<GlobalSystemMediaTransportControlsSessionManager, CurrentSessionChangedEventArgs> _currentSessionChanged;
+        private TypedEventHandler<GlobalSystemMediaTransportControlsSessionManager, SessionsChangedEventArgs> _sessionsChanged;
+        private TypedEventHandler<GlobalSystemMediaTransportControlsSession, MediaPropertiesChangedEventArgs> _mediaPropertiesChanged;
+        private TypedEventHandler<GlobalSystemMediaTransportControlsSession, PlaybackInfoChangedEventArgs> _playbackInfoChanged;
+        private TypedEventHandler<GlobalSystemMediaTransportControlsSession, TimelinePropertiesChangedEventArgs> _timelinePropertiesChanged;
 
-        public async void Seek(TimeSpan position)
+        public event Action<MediaInfo> Updated;
+        public event Action SessionLost;
+        public MediaInfo Current => _current;
+
+        public MediaService(Dispatcher dispatcher) { _dispatcher = dispatcher; }
+
+        public async Task SeekAsync(TimeSpan position)
         {
             var session = _session;
-            if (session == null) return;
+            if (_disposed || session == null) return;
             try { await session.TryChangePlaybackPositionAsync((long)Math.Max(0, position.Ticks)); }
             catch (Exception ex) { App.Log("媒体定位失败: " + ex.Message); }
         }
 
-        public MediaService(Dispatcher dispatcher) { _dispatcher = dispatcher; }
-
-        public async void Start()
+        public async Task StartAsync()
         {
+            if (_disposed || _started) return;
+            _started = true;
             try
             {
                 _manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                if (_disposed) return;
             }
             catch (Exception ex)
             {
                 App.Log("SMTC 初始化失败: " + ex);
-                _ = _dispatcher.BeginInvoke(new Action(() => Hook(null)));
+                Post(() => Hook(null));
                 return;
             }
 
-            _manager.CurrentSessionChanged += (manager, args) =>
-                _dispatcher.BeginInvoke(new Action(() => Hook(manager.GetCurrentSession())));
-            _manager.SessionsChanged += (manager, args) =>
-                _dispatcher.BeginInvoke(new Action(() => Hook(manager.GetCurrentSession())));
+            _currentSessionChanged = (manager, args) => Post(() => Hook(manager.GetCurrentSession()));
+            _sessionsChanged = (manager, args) => Post(() => Hook(manager.GetCurrentSession()));
+            _manager.CurrentSessionChanged += _currentSessionChanged;
+            _manager.SessionsChanged += _sessionsChanged;
 
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-            _timer.Tick += (sender, args) => Push(_session);
+            _timer.Tick += OnTimerTick;
             _timer.Start();
-
             Hook(_manager.GetCurrentSession());
+        }
+
+        private void OnTimerTick(object sender, EventArgs args) => Push(_session);
+
+        private void Post(Action action)
+        {
+            if (_disposed || _dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished) return;
+            try { _dispatcher.BeginInvoke(action); }
+            catch (InvalidOperationException) { }
         }
 
         private void Hook(GlobalSystemMediaTransportControlsSession session)
         {
-            if (ReferenceEquals(_session, session)) return;
-
+            if (_disposed || ReferenceEquals(_session, session)) return;
+            UnhookSession();
             _session = session;
             _sessionGeneration++;
             _refreshGeneration++;
@@ -128,33 +137,42 @@ namespace DesktopBar.Services
                 return;
             }
 
-            session.MediaPropertiesChanged += (sender, args) =>
-                _dispatcher.BeginInvoke(new Action(() => BeginRefresh(session)));
-            session.PlaybackInfoChanged += (sender, args) =>
-                _dispatcher.BeginInvoke(new Action(() => Push(session)));
-            session.TimelinePropertiesChanged += (sender, args) =>
-                _dispatcher.BeginInvoke(new Action(() => Push(session)));
-
+            _mediaPropertiesChanged = (sender, args) => Post(() => BeginRefresh(session));
+            _playbackInfoChanged = (sender, args) => Post(() => Push(session));
+            _timelinePropertiesChanged = (sender, args) => Post(() => Push(session));
+            session.MediaPropertiesChanged += _mediaPropertiesChanged;
+            session.PlaybackInfoChanged += _playbackInfoChanged;
+            session.TimelinePropertiesChanged += _timelinePropertiesChanged;
             BeginRefresh(session);
             Push(session);
         }
 
+        private void UnhookSession()
+        {
+            if (_session == null) return;
+            try { if (_mediaPropertiesChanged != null) _session.MediaPropertiesChanged -= _mediaPropertiesChanged; } catch { }
+            try { if (_playbackInfoChanged != null) _session.PlaybackInfoChanged -= _playbackInfoChanged; } catch { }
+            try { if (_timelinePropertiesChanged != null) _session.TimelinePropertiesChanged -= _timelinePropertiesChanged; } catch { }
+            _mediaPropertiesChanged = null;
+            _playbackInfoChanged = null;
+            _timelinePropertiesChanged = null;
+        }
+
         private void BeginRefresh(GlobalSystemMediaTransportControlsSession session)
         {
-            if (!ReferenceEquals(_session, session)) return;
+            if (_disposed || !ReferenceEquals(_session, session)) return;
             long sessionGeneration = _sessionGeneration;
             long refreshGeneration = ++_refreshGeneration;
             _ = RefreshPropsAsync(session, sessionGeneration, refreshGeneration);
         }
 
-        private async Task RefreshPropsAsync(
-            GlobalSystemMediaTransportControlsSession session,
-            long sessionGeneration,
-            long refreshGeneration)
+        private async Task RefreshPropsAsync(GlobalSystemMediaTransportControlsSession session,
+            long sessionGeneration, long refreshGeneration)
         {
             try
             {
                 var props = await session.TryGetMediaPropertiesAsync();
+                if (!IsCurrent(session, sessionGeneration, refreshGeneration)) return;
                 var timeline = session.GetTimelineProperties();
                 string title = props?.Title ?? "";
                 string artist = props?.Artist ?? "";
@@ -163,41 +181,19 @@ namespace DesktopBar.Services
                 bool seekSupported = timeline.MaxSeekTime > timeline.MinSeekTime;
                 GetPlayback(session, timeline, out bool playing, out TimeSpan position);
 
-                if (!IsCurrent(session, sessionGeneration, refreshGeneration)) return;
-
-                // 缩略图 API 没有可提前比较的稳定 ID；每次属性刷新都先清图，
-                // 这样同名曲目或专辑封面更新时也不会在异步读取期间沿用旧图。
-                Publish(new MediaInfo(
-                    NextPublishedGeneration(),
-                    true,
-                    sessionKey,
-                    trackKey,
-                    "",
-                    title,
-                    artist,
-                    null,
-                    playing,
-                    position,
-                    timeline.EndTime,
-                    seekSupported));
+                Publish(new MediaInfo(NextPublishedGeneration(), true, sessionKey, trackKey, "", title,
+                    artist, null, playing, position, timeline.EndTime, seekSupported));
 
                 var cover = await LoadCoverAsync(props?.Thumbnail);
                 if (!IsCurrent(session, sessionGeneration, refreshGeneration)) return;
 
+                // 封面读取期间时间线可能推进；发布封面前再次读取，避免旧快照回退进度。
+                timeline = session.GetTimelineProperties();
+                trackKey = BuildTrackKey(sessionKey, props, timeline.EndTime);
+                seekSupported = timeline.MaxSeekTime > timeline.MinSeekTime;
                 GetPlayback(session, timeline, out playing, out position);
-                Publish(new MediaInfo(
-                    NextPublishedGeneration(),
-                    true,
-                    sessionKey,
-                    trackKey,
-                    cover.Key,
-                    title,
-                    artist,
-                    cover.Image,
-                    playing,
-                    position,
-                    timeline.EndTime,
-                    seekSupported));
+                Publish(new MediaInfo(NextPublishedGeneration(), true, sessionKey, trackKey, cover.Key,
+                    title, artist, cover.Image, playing, position, timeline.EndTime, seekSupported));
             }
             catch (Exception ex)
             {
@@ -206,98 +202,60 @@ namespace DesktopBar.Services
             }
         }
 
-        private bool IsCurrent(
-            GlobalSystemMediaTransportControlsSession session,
-            long sessionGeneration,
+        private bool IsCurrent(GlobalSystemMediaTransportControlsSession session, long sessionGeneration,
             long refreshGeneration)
         {
-            return ReferenceEquals(_session, session)
-                && _sessionGeneration == sessionGeneration
-                && _refreshGeneration == refreshGeneration;
+            return !_disposed && ReferenceEquals(_session, session)
+                && _sessionGeneration == sessionGeneration && _refreshGeneration == refreshGeneration;
         }
 
-        private static string BuildTrackKey(
-            string sessionKey,
-            GlobalSystemMediaTransportControlsSessionMediaProperties props,
-            TimeSpan duration)
+        private static string BuildTrackKey(string sessionKey,
+            GlobalSystemMediaTransportControlsSessionMediaProperties props, TimeSpan duration)
         {
             const string separator = "\u001F";
-            return string.Join(separator,
-                sessionKey ?? "",
-                props?.Title ?? "",
-                props?.Artist ?? "",
-                props?.AlbumArtist ?? "",
-                props?.AlbumTitle ?? "",
-                props?.Subtitle ?? "",
-                props?.TrackNumber.ToString() ?? "",
-                duration.Ticks.ToString());
+            return string.Join(separator, sessionKey ?? "", props?.Title ?? "", props?.Artist ?? "",
+                props?.AlbumArtist ?? "", props?.AlbumTitle ?? "", props?.Subtitle ?? "",
+                props?.TrackNumber.ToString() ?? "", duration.Ticks.ToString());
         }
 
-        private void GetPlayback(
-            GlobalSystemMediaTransportControlsSession session,
-            GlobalSystemMediaTransportControlsSessionTimelineProperties timeline,
-            out bool playing,
+        private void GetPlayback(GlobalSystemMediaTransportControlsSession session,
+            GlobalSystemMediaTransportControlsSessionTimelineProperties timeline, out bool playing,
             out TimeSpan position)
         {
             var playback = session.GetPlaybackInfo();
-            playing = playback != null
-                && playback.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            playing = playback != null && playback.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
             position = timeline.Position;
             if (playing && _posTime != DateTime.MinValue)
             {
                 var elapsed = DateTime.Now - _posTime;
                 if (elapsed < TimeSpan.FromSeconds(3)) position += elapsed;
             }
-            if (timeline.EndTime > TimeSpan.Zero && position > timeline.EndTime)
-                position = timeline.EndTime;
+            if (timeline.EndTime > TimeSpan.Zero && position > timeline.EndTime) position = timeline.EndTime;
         }
 
         private void Push(GlobalSystemMediaTransportControlsSession session)
         {
-            if (session == null || !ReferenceEquals(_session, session) || !_current.HasSession) return;
+            if (_disposed || session == null || !ReferenceEquals(_session, session) || !_current.HasSession) return;
             try
             {
                 var timeline = session.GetTimelineProperties();
                 GetPlayback(session, timeline, out bool playing, out TimeSpan position);
                 _posTime = DateTime.Now;
-                Publish(new MediaInfo(
-                    NextPublishedGeneration(),
-                    true,
-                    _current.SessionKey,
-                    _current.TrackKey,
-                    _current.ThumbnailKey,
-                    _current.Title,
-                    _current.Artist,
-                    _current.Cover,
-                    playing,
-                    position,
-                    timeline.EndTime,
-                    timeline.MaxSeekTime > timeline.MinSeekTime));
+                Publish(new MediaInfo(NextPublishedGeneration(), true, _current.SessionKey, _current.TrackKey,
+                    _current.ThumbnailKey, _current.Title, _current.Artist, _current.Cover, playing, position,
+                    timeline.EndTime, timeline.MaxSeekTime > timeline.MinSeekTime));
             }
             catch { }
         }
 
-        private void PublishEmpty(bool hasSession)
-        {
-            Publish(new MediaInfo(
-                NextPublishedGeneration(),
-                hasSession,
-                _sessionKey,
-                "",
-                "",
-                "",
-                "",
-                null,
-                false,
-                TimeSpan.Zero,
-                TimeSpan.Zero,
-                false));
-        }
+        private void PublishEmpty(bool hasSession) => Publish(new MediaInfo(NextPublishedGeneration(), hasSession,
+            _sessionKey, "", "", "", "", null, false, TimeSpan.Zero, TimeSpan.Zero, false));
 
         private long NextPublishedGeneration() => ++_publishedGeneration;
 
         private void Publish(MediaInfo info)
         {
+            if (_disposed) return;
             _current = info;
             Updated?.Invoke(info);
         }
@@ -306,12 +264,7 @@ namespace DesktopBar.Services
         {
             public BitmapSource Image { get; }
             public string Key { get; }
-
-            public CoverResult(BitmapSource image, string key)
-            {
-                Image = image;
-                Key = key;
-            }
+            public CoverResult(BitmapSource image, string key) { Image = image; Key = key; }
         }
 
         private static async Task<CoverResult> LoadCoverAsync(IRandomAccessStreamReference reference)
@@ -322,27 +275,59 @@ namespace DesktopBar.Services
                 using var stream = await reference.OpenReadAsync();
                 if (stream.Size == 0) return new CoverResult(null, "empty");
                 if (stream.Size > MaxCoverBytes) return new CoverResult(null, "oversized:" + stream.Size);
-
                 uint size = (uint)stream.Size;
                 var bytes = new byte[size];
                 using var reader = new DataReader(stream);
                 await reader.LoadAsync(size).AsTask();
                 reader.ReadBytes(bytes);
+                // SHA-256 与 WPF 图像解码都可能昂贵；冻结后的 BitmapSource 可安全回到 UI 使用。
+                return await Task.Run(() => DecodeCover(bytes));
+            }
+            catch { return new CoverResult(null, "error"); }
+        }
 
+        private static CoverResult DecodeCover(byte[] bytes)
+        {
+            try
+            {
                 string key = "sha256:" + Convert.ToHexString(SHA256.HashData(bytes));
                 var image = new BitmapImage();
-                using var memory = new MemoryStream(bytes);
+                using var memory = new MemoryStream(bytes, writable: false);
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
+                image.DecodePixelWidth = 384;
                 image.StreamSource = memory;
                 image.EndInit();
                 image.Freeze();
                 return new CoverResult(image, key);
             }
-            catch
+            catch { return new CoverResult(null, "error"); }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _sessionGeneration++;
+            _refreshGeneration++;
+            if (_timer != null)
             {
-                return new CoverResult(null, "error");
+                _timer.Stop();
+                _timer.Tick -= OnTimerTick;
+                _timer = null;
             }
+            UnhookSession();
+            _session = null;
+            if (_manager != null)
+            {
+                try { if (_currentSessionChanged != null) _manager.CurrentSessionChanged -= _currentSessionChanged; } catch { }
+                try { if (_sessionsChanged != null) _manager.SessionsChanged -= _sessionsChanged; } catch { }
+            }
+            _currentSessionChanged = null;
+            _sessionsChanged = null;
+            _manager = null;
+            Updated = null;
+            SessionLost = null;
         }
     }
 }

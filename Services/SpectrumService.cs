@@ -53,14 +53,15 @@ namespace DesktopBar.Services
         private CancellationTokenSource _runCancellation;
         private int _users;
         private long _lastDataTick;
+        private long _lastBandsTick;
 
         private volatile float[] _bands = new float[BarCount];
 
         /// <summary>当前频段能量(0~1)。数组整体只读替换,读取方拿引用直接遍历即可。</summary>
         public float[] Bands => _bands;
 
-        /// <summary>最近一次收到音频数据的时间(Environment.TickCount64),用于判断采集是否中断。</summary>
-        public long LastDataTick => _lastDataTick;
+        /// <summary>最近一次已发布频段的时间(Environment.TickCount64),用于判断显示是否停滞。</summary>
+        public long LastDataTick => _lastBandsTick;
 
         private SpectrumService() { }
 
@@ -84,7 +85,8 @@ namespace DesktopBar.Services
             }
 
             // 不在 _gate 内等待；工作线程退出时会取得该锁来清理状态。
-            cancellation?.Cancel();
+            try { cancellation?.Cancel(); }
+            catch (ObjectDisposedException) { }
         }
 
         /// <summary>请求停止所有采集引用，用于应用正常退出时回收 WASAPI 资源。</summary>
@@ -99,7 +101,8 @@ namespace DesktopBar.Services
                 thread = _thread;
             }
 
-            cancellation?.Cancel();
+            try { cancellation?.Cancel(); }
+            catch (ObjectDisposedException) { }
             if (thread != null && thread != Thread.CurrentThread && !thread.Join(1500))
                 App.Log("频谱采集线程停止超时，将等待后台线程自行退出");
         }
@@ -175,6 +178,7 @@ namespace DesktopBar.Services
             _agc = 0;
             _bands = new float[BarCount];
             _lastDataTick = 0;
+            _lastBandsTick = 0;
         }
 
         /// <summary>FFT 链路自检:注入 0.5 幅度 440Hz 正弦,验证频段聚合与 AGC 输出。</summary>
@@ -218,6 +222,13 @@ namespace DesktopBar.Services
                 _effectiveRate = rate / _decim;
                 _decimAccum = 0;
                 _decimCount = 0;
+                // 设备/格式重连后不能混入旧端点的采样历史。
+                Array.Clear(_hist, 0, _hist.Length);
+                Array.Clear(_smooth, 0, _smooth.Length);
+                _histPos = _histCount = _pending = 0;
+                _agc = 0;
+                _bands = new float[BarCount];
+                _lastBandsTick = 0;
                 _lastRate = 0; // 让 ComputeBands 按新采样率重建窗表
                 App.Log("频谱: 环回采集 " + rate + "Hz " + channels + "声道 " + (isFloat ? "float32" : "pcm16")
                     + (_decim > 1 ? " 抽取1/" + _decim + "→" + _effectiveRate + "Hz" : ""));
@@ -252,18 +263,31 @@ namespace DesktopBar.Services
                         continue;
                     }
 
-                    Check(capture.GetBuffer(out IntPtr data, out uint frames, out uint flags, out _, out _), "读取音频数据");
-                    _lastDataTick = now;
-                    lastPacket = now;
-                    if (frames > 0)
+                    uint frames = 0;
+                    bool bufferAcquired = false;
+                    try
                     {
-                        if ((flags & BufferFlagSilent) == 0 && data != IntPtr.Zero)
-                            Accumulate(data, (int)frames, channels, isFloat);
-                        else
-                            AccumulateSilence((int)frames);
+                        Check(capture.GetBuffer(out IntPtr data, out frames, out uint flags, out _, out _), "读取音频数据");
+                        bufferAcquired = true;
+                        _lastDataTick = now;
+                        lastPacket = now;
+                        if (frames > 0)
+                        {
+                            if ((flags & BufferFlagSilent) == 0 && data != IntPtr.Zero)
+                                Accumulate(data, (int)frames, channels, isFloat);
+                            else
+                                AccumulateSilence((int)frames);
+                        }
+                        if (_debug) _dbgPackets++;
                     }
-                    Check(capture.ReleaseBuffer(frames), "释放音频数据");
-                    if (_debug) _dbgPackets++;
+                    finally
+                    {
+                        if (bufferAcquired)
+                        {
+                            try { Check(capture.ReleaseBuffer(frames), "释放音频数据"); }
+                            catch { }
+                        }
+                    }
 
                     if (_debug && now - _dbgLast > 5000)
                     {
@@ -411,6 +435,7 @@ namespace DesktopBar.Services
                 next[b] = _smooth[b];
             }
             _bands = next;
+            _lastBandsTick = Environment.TickCount64;
         }
 
         private void DecayAll()
@@ -422,6 +447,7 @@ namespace DesktopBar.Services
                 next[b] = _smooth[b];
             }
             _bands = next;
+            _lastBandsTick = Environment.TickCount64;
         }
 
         private void BuildTables(int rate)

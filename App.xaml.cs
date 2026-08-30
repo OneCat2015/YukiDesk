@@ -45,12 +45,11 @@ namespace DesktopBar
             DispatcherUnhandledException += (s, args) => { Log("未处理异常: " + args.Exception); args.Handled = true; };
             AppDomain.CurrentDomain.UnhandledException += (s, args) => Log("后台线程致命异常: " + args.ExceptionObject);
             Settings = SettingsService.Load(out bool firstRun);
-            Settings.AutoStart = AutoStartService.IsEnabled();
-            // 始终刷新一次 Run 项，清理旧 DesktopBar 路径并写入当前可执行文件。
+            // 配置是用户的明确偏好；不要用一次可能失败的注册表读取反向覆盖它。
             AutoStartService.Set(Settings.AutoStart);
             try { Directory.CreateDirectory(Settings.StorageRoot); foreach (var n in Settings.Folders) Directory.CreateDirectory(Path.Combine(Settings.StorageRoot, n)); } catch { }
             if (Settings.Folders.Count == 0) { Settings.Folders.Add("常用"); try { Directory.CreateDirectory(Path.Combine(Settings.StorageRoot, "常用")); } catch { } Save(); }
-            if (firstRun) { AutoStartService.Set(true); Settings.AutoStart = true; Save(); }
+            if (firstRun) Save();
             Log("YukiDesk 启动配置已加载");
             ThemeService.Start();
             Log("YukiDesk 主题服务已启动");
@@ -106,6 +105,7 @@ namespace DesktopBar
         public static void ApplyAndSave() { Save(); Bar?.ApplySettings(); }
         public static void ShowSettings()
         {
+            Bar?.ClosePanels();
             if (_settingsWin != null)
             {
                 _settingsWin.WindowState = WindowState.Normal;

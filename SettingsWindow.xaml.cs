@@ -406,23 +406,20 @@ namespace DesktopBar
 
         // ---------- 小文件夹 ----------
 
-        private static bool IsValidFolderName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name) || name != name.Trim()) return false;
-            if (Path.IsPathRooted(name) || name == "." || name == "..") return false;
-            if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
-            return string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal);
-        }
+        private static bool IsValidFolderName(string name) => SettingsService.IsValidFolderName(name);
 
         private string GetFolderPath(string name)
         {
             if (!IsValidFolderName(name)) return null;
             try
             {
-                string root = Path.GetFullPath(S.StorageRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string root = Path.GetFullPath(S.StorageRoot);
                 string candidate = Path.GetFullPath(Path.Combine(root, name));
-                return string.Equals(Path.GetDirectoryName(candidate)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                    root, StringComparison.OrdinalIgnoreCase) ? candidate : null;
+                string relative = Path.GetRelativePath(root, candidate);
+                if (relative == "." || Path.IsPathRooted(relative)
+                    || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                    || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)) return null;
+                return string.Equals(relative, name, StringComparison.OrdinalIgnoreCase) ? candidate : null;
             }
             catch { return null; }
         }
@@ -441,9 +438,10 @@ namespace DesktopBar
                     .Select(Path.GetFileName)
                     .Where(n => IsValidFolderName(n))
                     .ToList();
+                var comparer = StringComparer.OrdinalIgnoreCase;
                 bool changed = false;
                 // 新发现的文件夹追加到末尾(顶栏最右)。
-                foreach (var name in onDisk.Where(n => !S.Folders.Contains(n)))
+                foreach (var name in onDisk.Where(n => !S.Folders.Contains(n, comparer)))
                 {
                     S.Folders.Add(name);
                     changed = true;
@@ -451,7 +449,7 @@ namespace DesktopBar
                 // 配置里有但磁盘上已删掉的,自动剔除。
                 for (int i = S.Folders.Count - 1; i >= 0; i--)
                 {
-                    if (!onDisk.Contains(S.Folders[i]))
+                    if (!onDisk.Contains(S.Folders[i], comparer))
                     {
                         S.Folders.RemoveAt(i);
                         changed = true;
@@ -486,7 +484,8 @@ namespace DesktopBar
                 {
                     S.StorageRoot = dlg.FolderName;
                     pathBox.Text = S.StorageRoot;
-                    if (SyncFoldersFromDisk()) Save();
+                    SyncFoldersFromDisk();
+                    Save();
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
                 }
@@ -502,7 +501,7 @@ namespace DesktopBar
             FoldersHost.Children.Add(pathCard);
 
             var listCard = Card("小文件夹管理",
-                "拖动列表项排序(顶栏同步生效);列表自动包含目录下所有文件夹。「移除」只从顶栏拿掉,不会删除磁盘上的文件。", out var lbody);
+                "拖动列表项排序(顶栏同步生效);列表自动包含目录下所有文件夹。「删除文件夹」会将该文件夹及其内容移入回收站。", out var lbody);
             _folderList = new ListBox
             {
                 Style = (Style)FindResource("DarkList"),
@@ -518,7 +517,7 @@ namespace DesktopBar
 
             var btnAdd = new Button { Content = "新建文件夹", Style = (Style)FindResource("BtnAccent") };
             var btnRename = new Button { Content = "重命名", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
-            var btnRemove = new Button { Content = "移除", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
+            var btnRemove = new Button { Content = "删除文件夹", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
             btnAdd.Click += (s, e) =>
             {
                 var name = Prompt.Show("新建小文件夹", "文件夹名称:", "新文件夹");
@@ -533,7 +532,7 @@ namespace DesktopBar
                     string dir = GetFolderPath(name);
                     if (dir == null) return;
                     Directory.CreateDirectory(dir);
-                    if (!S.Folders.Contains(name)) S.Folders.Add(name);
+                    if (!S.Folders.Contains(name, StringComparer.OrdinalIgnoreCase)) S.Folders.Add(name);
                     Save();
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
@@ -563,7 +562,22 @@ namespace DesktopBar
                     string oldDir = GetFolderPath(old);
                     string newDir = GetFolderPath(name);
                     if (oldDir == null || newDir == null) return;
-                    if (Directory.Exists(oldDir)) Directory.Move(oldDir, newDir);
+                    if (!Directory.Exists(oldDir))
+                    {
+                        MessageBox.Show("原文件夹不存在，未修改配置。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    if (Directory.Exists(newDir))
+                    {
+                        MessageBox.Show("目标文件夹已存在。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    if (S.Folders.Where((folder, index) => index != idx).Contains(name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show("同名小文件夹已存在。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    Directory.Move(oldDir, newDir);
                     S.Folders[idx] = name;
                     Save();
                     RefreshFolderList();

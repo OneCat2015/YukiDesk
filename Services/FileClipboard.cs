@@ -90,20 +90,28 @@ namespace DesktopBar.Services
         {
             try
             {
-                string dest = UniqueDest(Path.GetFileName(src), destDir);
+                string sourceFull = Path.GetFullPath(src);
+                string destinationRoot = Path.GetFullPath(destDir);
+                if (!Directory.Exists(destinationRoot)) return false;
+                if (Directory.Exists(sourceFull) && (IsReparsePoint(sourceFull) || IsInside(sourceFull, destinationRoot)))
+                {
+                    App.Log("已阻止把文件夹复制或移动到自身内部: " + sourceFull);
+                    return false;
+                }
+                string dest = UniqueDest(Path.GetFileName(sourceFull), destinationRoot);
                 if (!move)
                 {
                     CopyPath(src, dest);
                     return true;
                 }
-                if (File.Exists(src)) File.Move(src, dest);
-                else if (Directory.Exists(src))
+                if (File.Exists(sourceFull)) File.Move(sourceFull, dest);
+                else if (Directory.Exists(sourceFull))
                 {
-                    if (SameVolume(src, destDir)) Directory.Move(src, dest);
+                    if (SameVolume(sourceFull, destinationRoot)) Directory.Move(sourceFull, dest);
                     else
                     {
-                        CopyDir(src, dest);
-                        Directory.Delete(src, true);
+                        CopyDir(sourceFull, dest);
+                        Directory.Delete(sourceFull, true);
                     }
                 }
                 return true;
@@ -137,17 +145,44 @@ namespace DesktopBar.Services
 
         public static void CopyDir(string srcDir, string dstDir)
         {
+            if (IsInside(srcDir, dstDir))
+                throw new IOException("目标目录位于源目录内部。");
             var pending = new Stack<(string Src, string Dst)>();
             pending.Push((srcDir, dstDir));
             while (pending.Count > 0)
             {
                 var (src, dst) = pending.Pop();
+                if (IsReparsePoint(src)) continue;
                 Directory.CreateDirectory(dst);
                 foreach (var file in Directory.EnumerateFiles(src))
-                    File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+                {
+                    if (!IsReparsePoint(file))
+                        File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+                }
                 foreach (var sub in Directory.EnumerateDirectories(src))
-                    pending.Push((sub, Path.Combine(dst, Path.GetFileName(sub))));
+                {
+                    if (!IsReparsePoint(sub))
+                        pending.Push((sub, Path.Combine(dst, Path.GetFileName(sub))));
+                }
             }
+        }
+
+        private static bool IsInside(string source, string candidate)
+        {
+            try
+            {
+                string sourceFull = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string candidateFull = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return string.Equals(sourceFull, candidateFull, StringComparison.OrdinalIgnoreCase)
+                    || candidateFull.StartsWith(sourceFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+            catch { return true; }
         }
 
         private static bool SameVolume(string src, string destDir)

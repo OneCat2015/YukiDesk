@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -14,6 +15,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Windows.Interop;
+using System.Threading;
 using FilePath = System.IO.Path;
 using DesktopBar.Interop;
 using DesktopBar.Models;
@@ -322,7 +324,6 @@ namespace DesktopBar.UI
                 }
                 if (muted.HasValue) _muted = muted.Value;
             };
-            _poll.Start();
             Pill.MouseWheel += (s, e) => { _volumeWritesEnabled = true; Adjust(e.Delta); };
             Panel.MouseWheel += (s, e) => { _volumeWritesEnabled = true; Adjust(e.Delta); };
         }
@@ -331,7 +332,10 @@ namespace DesktopBar.UI
         {
             RefreshDevicesAsync();
             SyncFromDevice();
+            _poll.Start();
         }
+
+        protected override void OnPanelHidden() => _poll.Stop();
 
         private async void RefreshDevicesAsync()
         {
@@ -426,6 +430,7 @@ namespace DesktopBar.UI
         private bool _disposed;
         private bool _filesDirty = true;
         private int _fileLoadVersion;
+        private readonly List<DispatcherTimer> _itemOpenTimers = new List<DispatcherTimer>();
         private string Dir
         {
             get
@@ -433,21 +438,19 @@ namespace DesktopBar.UI
                 if (!IsSafeLeafName(_name)) return string.Empty;
                 try
                 {
-                    string root = FilePath.GetFullPath(App.Settings.StorageRoot).TrimEnd('\\', '/');
+                    string root = FilePath.GetFullPath(App.Settings.StorageRoot);
                     string candidate = FilePath.GetFullPath(FilePath.Combine(root, _name));
-                    return FilePath.GetDirectoryName(candidate)?.TrimEnd('\\', '/')?.Equals(root, StringComparison.OrdinalIgnoreCase) == true ? candidate : string.Empty;
+                    string relative = FilePath.GetRelativePath(root, candidate);
+                    if (relative == "." || FilePath.IsPathRooted(relative)
+                        || relative.StartsWith(".." + FilePath.DirectorySeparatorChar, StringComparison.Ordinal)
+                        || relative.StartsWith(".." + FilePath.AltDirectorySeparatorChar, StringComparison.Ordinal)) return string.Empty;
+                    return string.Equals(relative, _name, StringComparison.OrdinalIgnoreCase) ? candidate : string.Empty;
                 }
                 catch { return string.Empty; }
             }
         }
 
-        private static bool IsSafeLeafName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name) || name != name.Trim()) return false;
-            if (FilePath.IsPathRooted(name) || name == "." || name == "..") return false;
-            if (name.IndexOfAny(FilePath.GetInvalidFileNameChars()) >= 0) return false;
-            return string.Equals(FilePath.GetFileName(name), name, StringComparison.Ordinal);
-        }
+        private static bool IsSafeLeafName(string name) => SettingsService.IsValidFolderName(name);
         public FolderModule(string name, TabStyle st) : base(st)
         {
             _name = name;
@@ -477,8 +480,9 @@ namespace DesktopBar.UI
         {
             try
             {
-                _watcher = new FileSystemWatcher(Dir) { EnableRaisingEvents = true };
+                    _watcher = new FileSystemWatcher(Dir) { EnableRaisingEvents = true };
                 _watcher.Created += (s, e) => RestartDebounce();
+                _watcher.Changed += (s, e) => RestartDebounce();
                 _watcher.Deleted += (s, e) => RestartDebounce();
                 _watcher.Renamed += (s, e) => RestartDebounce();
                 _watcher.Error += (s, e) => RestartDebounce();
@@ -487,13 +491,17 @@ namespace DesktopBar.UI
         }
         private void RestartDebounce()
         {
-            if (_disposed) return;
-            Dispatcher.BeginInvoke(new Action(() =>
+            if (_disposed || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            try
             {
-                if (_disposed) return;
-                _debounce.Stop();
-                _debounce.Start();
-            }));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_disposed) return;
+                    _debounce.Stop();
+                    _debounce.Start();
+                }));
+            }
+            catch (InvalidOperationException) { }
         }
         private void ShowBlankMenu()
         {
@@ -513,29 +521,41 @@ namespace DesktopBar.UI
         private async void LoadFiles()
         {
             int version = ++_fileLoadVersion;
-            _filesDirty = false;
             string directory = Dir;
-            var items = await Task.Run(() => SnapshotFiles(directory));
-            if (_disposed || !Open || version != _fileLoadVersion) return;
-
-            _wrap.Children.Clear();
-            int cols = Math.Min(4, Math.Max(1, items.Count));
-            // 最多四列；为四列预留完整 viewport，细滚动条不会把第四列挤到下一行。
-            double cell = 88 * Ui.Scale;
-            _wrap.Width = cols * cell;
-            Panel.Width = (cols * 90 + 28) * Ui.Scale;
-
-            const int batchSize = 8;
-            for (int index = 0; index < items.Count; index += batchSize)
+            try
             {
-                if (_disposed || !Open || version != _fileLoadVersion) return;
-                int end = Math.Min(items.Count, index + batchSize);
-                for (int i = index; i < end; i++)
-                    _wrap.Children.Add(MakeItem(items[i]));
+                var items = await Task.Run(() => SnapshotFiles(directory));
+                if (_disposed || !Open || version != _fileLoadVersion)
+                {
+                    _filesDirty = true;
+                    return;
+                }
 
-                if (end < items.Count)
-                    await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                _wrap.Children.Clear();
+                int cols = Math.Min(4, Math.Max(1, items.Count));
+                // 最多四列；为四列预留完整 viewport，细滚动条不会把第四列挤到下一行。
+                double cell = 88 * Ui.Scale;
+                _wrap.Width = cols * cell;
+                Panel.Width = (cols * 90 + 28) * Ui.Scale;
+
+                const int batchSize = 8;
+                for (int index = 0; index < items.Count; index += batchSize)
+                {
+                    if (_disposed || !Open || version != _fileLoadVersion)
+                    {
+                        _filesDirty = true;
+                        return;
+                    }
+                    int end = Math.Min(items.Count, index + batchSize);
+                    for (int i = index; i < end; i++)
+                        _wrap.Children.Add(MakeItem(items[i]));
+
+                    if (end < items.Count)
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                }
+                _filesDirty = false;
             }
+            catch (InvalidOperationException) { _filesDirty = true; }
         }
 
         private static List<FileSystemInfo> SnapshotFiles(string directory)
@@ -562,12 +582,16 @@ namespace DesktopBar.UI
             {
                 Width = 48 * scale,
                 Height = 48 * scale,
-                Source = IconCache.Get(f.FullName, isDir, f.Extension),
+                Source = IconCache.GetFallback(isDir, f.Extension),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Stretch = Stretch.Uniform,
                 SnapsToDevicePixels = true,
                 UseLayoutRounding = true
             };
+            IconCache.LoadAsync(f.FullName, isDir, f.Extension, icon =>
+            {
+                if (!_disposed && Open && img.IsVisible) img.Source = icon;
+            });
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
 
             string displayName =
@@ -679,6 +703,7 @@ namespace DesktopBar.UI
                 }
                 if (e.ClickCount >= 2)
                 {
+                    if (openTimer != null) _itemOpenTimers.Remove(openTimer);
                     openTimer?.Stop();
                     openTimer = null;
                     ShellOpen.OpenPath(f.FullName);
@@ -687,11 +712,13 @@ namespace DesktopBar.UI
                 {
                     openTimer?.Stop();
                     openTimer = new DispatcherTimer { Interval = SystemParameters.MouseHoverTime };
+                    _itemOpenTimers.Add(openTimer);
                     openTimer.Tick += (ts, te) =>
                     {
                         openTimer.Stop();
+                        _itemOpenTimers.Remove(openTimer);
                         openTimer = null;
-                        ShellOpen.OpenPath(f.FullName);
+                        if (!_disposed) ShellOpen.OpenPath(f.FullName);
                     };
                     openTimer.Start();
                 }
@@ -786,7 +813,10 @@ namespace DesktopBar.UI
         public override void Dispose()
         {
             _disposed = true;
+            _fileLoadVersion++;
             _debounce.Stop();
+            foreach (var timer in _itemOpenTimers) timer.Stop();
+            _itemOpenTimers.Clear();
             try
             {
                 if (_watcher != null) _watcher.EnableRaisingEvents = false;
@@ -803,6 +833,8 @@ namespace DesktopBar.UI
         private readonly WrapPanel _wrap = new WrapPanel();
         private readonly ScrollViewer _scroll;
         private readonly TextBlock _emptyHint;
+        private bool _disposed;
+        private int _loadVersion;
 
         public RecycleBinModule(TabStyle st) : base(st)
         {
@@ -881,18 +913,34 @@ namespace DesktopBar.UI
             }
         }
 
-        private void LoadItems()
+        private async void LoadItems()
         {
-            var items = RecycleBin.Enumerate();
-            _wrap.Children.Clear();
-            foreach (var it in items) _wrap.Children.Add(MakeRecycleItem(it));
-            bool empty = items.Count == 0;
-            _emptyHint.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
-            _wrap.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
-            int cols = Math.Min(4, Math.Max(1, items.Count));
-            double cell = 88 * Ui.Scale;
-            _wrap.Width = cols * cell;
-            Panel.Width = empty ? 190 * Ui.Scale : (cols * 90 + 28) * Ui.Scale;
+            int version = ++_loadVersion;
+            try
+            {
+                var items = await Task.Run(RecycleBin.Enumerate);
+                if (_disposed || !Open || version != _loadVersion) return;
+
+                _wrap.Children.Clear();
+                bool empty = items.Count == 0;
+                _emptyHint.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+                _wrap.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+                int cols = Math.Min(4, Math.Max(1, items.Count));
+                double cell = 88 * Ui.Scale;
+                _wrap.Width = cols * cell;
+                Panel.Width = empty ? 190 * Ui.Scale : (cols * 90 + 28) * Ui.Scale;
+
+                const int batchSize = 8;
+                for (int index = 0; index < items.Count; index += batchSize)
+                {
+                    if (_disposed || !Open || version != _loadVersion) return;
+                    int end = Math.Min(items.Count, index + batchSize);
+                    for (int i = index; i < end; i++) _wrap.Children.Add(MakeRecycleItem(items[i]));
+                    if (end < items.Count)
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                }
+            }
+            catch (InvalidOperationException) { }
         }
 
         private FrameworkElement MakeRecycleItem(RecycleItem item)
@@ -903,12 +951,16 @@ namespace DesktopBar.UI
             {
                 Width = 48 * scale,
                 Height = 48 * scale,
-                Source = IconCache.Get(item.DataPath, item.IsDirectory, ext),
+                Source = IconCache.GetFallback(item.IsDirectory, ext),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Stretch = Stretch.Uniform,
                 SnapsToDevicePixels = true,
                 UseLayoutRounding = true
             };
+            IconCache.LoadAsync(item.DataPath, item.IsDirectory, ext, icon =>
+            {
+                if (Open && img.IsVisible) img.Source = icon;
+            });
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
             var name = new TextBlock
             {
@@ -1032,6 +1084,14 @@ namespace DesktopBar.UI
             }));
         }
 
+        public override void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _loadVersion++;
+            base.Dispose();
+        }
+
         private static void AnimateItemBack(ScaleTransform transform)
         {
             transform.BeginAnimation(ScaleTransform.ScaleXProperty,
@@ -1044,12 +1104,11 @@ namespace DesktopBar.UI
 
         private void ShowClearMenu()
         {
-            int count = RecycleBin.Enumerate().Count;
-            string caption = count == 0 ? "回收站是空的" : "回收站 · " + count + " 个项目";
+            // 菜单打开不为数量同步扫描所有磁盘；展开页会在后台刷新准确内容。
             TrackFlyout(FlyoutMenu.Show(new List<FlyoutItem>
             {
                 new FlyoutItem("清空回收站", EmptyBin, danger: true)
-            }, caption));
+            }, "回收站"));
         }
 
         private void EmptyBin()
@@ -1061,25 +1120,114 @@ namespace DesktopBar.UI
             LoadItems();
         }
 
-        public override void Dispose()
-        {
-            base.Dispose();
-        }
     }
 
     public static class IconCache
     {
-        private static readonly Dictionary<string, BitmapSource> Cache = new Dictionary<string, BitmapSource>();
-        public static BitmapSource Get(string fullPath, bool isDir, string ext)
+        private sealed class IconRequest
         {
+            public string Path;
+            public bool IsDirectory;
+            public int PixelSize;
+            public string Key;
+        }
+
+        private static readonly object Gate = new object();
+        private static readonly Dictionary<string, BitmapSource> Cache = new Dictionary<string, BitmapSource>();
+        private static readonly Dictionary<string, BitmapSource> Fallbacks = new Dictionary<string, BitmapSource>();
+        private static readonly ConcurrentDictionary<string, byte> Pending = new ConcurrentDictionary<string, byte>();
+        private static readonly Dictionary<string, List<Action<BitmapSource>>> Callbacks = new Dictionary<string, List<Action<BitmapSource>>>();
+        private static readonly BlockingCollection<IconRequest> Queue = new BlockingCollection<IconRequest>(new ConcurrentQueue<IconRequest>());
+        private static Thread _worker;
+
+        public static BitmapSource GetFallback(bool isDir, string ext)
+        {
+            string key = (isDir ? "dir:" : "file:") + (ext ?? "").ToLowerInvariant();
+            lock (Gate)
+            {
+                if (Fallbacks.TryGetValue(key, out var icon)) return icon;
+                icon = TypeIcon(isDir, ext);
+                Fallbacks[key] = icon;
+                return icon;
+            }
+        }
+
+        public static void LoadAsync(string fullPath, bool isDir, string ext, Action<BitmapSource> apply)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath) || apply == null) return;
             int pixelSize = Math.Max(48, (int)Math.Ceiling(48 * Ui.Scale * 1.5));
             string key = (isDir ? "dir:" : "file:") + fullPath.ToLowerInvariant() + "|" + pixelSize;
-            if (Cache.TryGetValue(key, out var b)) return b;
-            b = NativeMethods.GetFileIcon(fullPath, isDir, pixelSize);
-            if (b == null)
-                b = TypeIcon(isDir, ext);
-            Cache[key] = b;
-            return b;
+            BitmapSource cached;
+            lock (Gate) Cache.TryGetValue(key, out cached);
+            if (cached != null)
+            {
+                apply(cached);
+                return;
+            }
+
+            lock (Gate)
+            {
+                if (!Callbacks.TryGetValue(key, out var callbacks))
+                    Callbacks[key] = callbacks = new List<Action<BitmapSource>>();
+                callbacks.Add(apply);
+            }
+            if (!Pending.TryAdd(key, 0)) return;
+            EnsureWorker();
+            Queue.Add(new IconRequest { Path = fullPath, IsDirectory = isDir, PixelSize = pixelSize, Key = key });
+        }
+
+        private static void EnsureWorker()
+        {
+            lock (Gate)
+            {
+                if (_worker != null) return;
+                _worker = new Thread(ProcessQueue)
+                {
+                    IsBackground = true,
+                    Name = "ShellIconLoader"
+                };
+                _worker.SetApartmentState(ApartmentState.STA);
+                _worker.Start();
+            }
+        }
+
+        private static void ProcessQueue()
+        {
+            foreach (var request in Queue.GetConsumingEnumerable())
+            {
+                BitmapSource icon = null;
+                try
+                {
+                    icon = NativeMethods.GetFileIcon(request.Path, request.IsDirectory, request.PixelSize)
+                        ?? GetFallback(request.IsDirectory, FilePath.GetExtension(request.Path));
+                    lock (Gate) Cache[request.Key] = icon;
+                }
+                catch (Exception ex)
+                {
+                    App.Log("提取文件图标失败: " + ex.Message);
+                    icon = GetFallback(request.IsDirectory, FilePath.GetExtension(request.Path));
+                }
+                finally
+                {
+                    List<Action<BitmapSource>> callbacks = null;
+                    lock (Gate)
+                    {
+                        if (Callbacks.TryGetValue(request.Key, out callbacks)) Callbacks.Remove(request.Key);
+                    }
+                    Pending.TryRemove(request.Key, out _);
+                    if (callbacks != null && icon != null)
+                    {
+                        try
+                        {
+                            System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                foreach (var callback in callbacks) callback(icon);
+                            }));
+                        }
+                        catch (InvalidOperationException) { }
+                    }
+                }
+            }
         }
 
         private static BitmapSource TypeIcon(bool isDir, string ext)
