@@ -31,6 +31,7 @@ namespace DesktopBar
         private MusicModule _music;
         private SpectrumModule _spectrum;
         private ModuleBase _power, _recycle, _volume;
+        private PerfModule _perfCpu, _perfGpu, _perfMemory, _perfNetwork;
         private bool _closing;
         private bool _mediaAvailable = true;
         private int _layoutVersion;
@@ -197,6 +198,12 @@ namespace DesktopBar
             _modules.Add(_spectrum);
             right.Children.Insert(0, _spectrum);
 
+            // 性能监测:逐个插到右组最前,最终从左到右为 网络、内存、GPU、CPU,紧邻频谱左侧。
+            _perfNetwork = AddPerfModule(right, PerfMetric.Network);
+            _perfMemory = AddPerfModule(right, PerfMetric.Memory);
+            _perfGpu = AddPerfModule(right, PerfMetric.Gpu);
+            _perfCpu = AddPerfModule(right, PerfMetric.Cpu);
+
             ApplyModuleVisibility();
 
             root.Children.Add(cols);
@@ -214,6 +221,14 @@ namespace DesktopBar
                 else
                     DesktopSpaceService.Apply(S);
             }));
+        }
+
+        private PerfModule AddPerfModule(StackPanel right, PerfMetric metric)
+        {
+            var module = new PerfModule(metric, S.SettingsBtn);
+            _modules.Add(module);
+            right.Children.Insert(0, module);
+            return module;
         }
 
         /// <summary>
@@ -234,6 +249,10 @@ namespace DesktopBar
                 _spectrum.SetSpectrumActive(S.ShowSpectrum);
             }
             SetModuleVisibility(_volume, S.ShowVolume);
+            SetModuleVisibility(_perfCpu, S.ShowMonitorCpu);
+            SetModuleVisibility(_perfGpu, S.ShowMonitorGpu);
+            SetModuleVisibility(_perfMemory, S.ShowMonitorMemory);
+            SetModuleVisibility(_perfNetwork, S.ShowMonitorNetwork);
         }
 
         /// <summary>立即关闭所有独立展开页，防止顶栏隐藏后留下可交互的置顶窗口。</summary>
@@ -281,6 +300,10 @@ namespace DesktopBar
             _music = null;
             _spectrum = null;
             _volume = null;
+            _perfCpu = null;
+            _perfGpu = null;
+            _perfMemory = null;
+            _perfNetwork = null;
         }
 
         private void WireMedia()

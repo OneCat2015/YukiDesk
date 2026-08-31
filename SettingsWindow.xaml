@@ -22,6 +22,7 @@
 
             <Border x:Name="TitleBar" Grid.Row="0"
                     Background="{DynamicResource SettingsTitleBackground}"
+                    CornerRadius="13,13,0,0"
                     MouseLeftButtonDown="Chrome_MouseLeftButtonDown">
                 <Grid>
                     <TextBlock x:Name="TitleText" Text="YukiDesk 设置" FontSize="15" FontWeight="SemiBold"

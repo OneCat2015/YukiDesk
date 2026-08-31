@@ -846,18 +846,13 @@ namespace DesktopBar.UI
             Pill.Child = CenterIcon(MakeTrashGlyph(22));
             Pill.MouseLeftButtonUp += (s, e) => ShowPanel();
             Pill.MouseRightButtonUp += (s, e) => { ShowClearMenu(); e.Handled = true; };
-            // 双击胶囊：用 explorer 打开回收站视图（回收站 CLSID，固定常量参数，无任何外部输入）。
+            // 双击胶囊:直接打开回收站视图(SHOpenFolderAndSelectItems 会打开"父文件夹"即桌面,
+            // 对虚拟根文件夹必须用 shell 命名空间路径导航进去;CLSID 是固定常量)。
             Pill.MouseLeftButtonDown += (s, e) =>
             {
                 if (e.ClickCount != 2) return;
                 e.Handled = true;
-                try
-                {
-                    // 回收站 CLSID 是固定常量；走 Shell 命名空间 API，不启动子进程。
-                    int hr = NativeMethods.OpenShellNamespace("::{645FF040-5081-101B-9F08-00AA002F954E}");
-                    if (hr != 0) App.Log("打开回收站 hr=0x" + hr.ToString("X8"));
-                }
-                catch (Exception ex) { App.Log("打开回收站失败: " + ex.Message); }
+                NativeMethods.ShellExecuteOpen("shell:::{645FF040-5081-101B-9F08-00AA002F954E}");
             };
 
             _emptyHint = new TextBlock
@@ -1515,6 +1510,183 @@ namespace DesktopBar.UI
                 _captureActive = false;
                 SpectrumService.Instance.ReleaseRef();
             }
+            base.Dispose();
+        }
+    }
+
+    /// <summary>性能监测胶囊指标。</summary>
+    public enum PerfMetric { Cpu, Gpu, Memory, Network }
+
+    /// <summary>性能监测胶囊:无展开页,数值由 PerfService 每秒采样刷新;四个指标各自独立显隐。</summary>
+    public class PerfModule : ModuleBase
+    {
+        private readonly PerfMetric _metric;
+        private readonly TextBlock _value;
+        private bool _active;
+        private bool _disposed;
+
+        public PerfModule(PerfMetric metric, TabStyle st) : base(st)
+        {
+            _metric = metric;
+            double s = Ui.Scale;
+            var sp = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            if (metric != PerfMetric.Network)
+            {
+                // 网络胶囊不带图标:上行/下行各自有箭头标识,省出宽度。
+                sp.Children.Add(metric switch
+                {
+                    PerfMetric.Cpu => MakeCpuGlyph(17),
+                    PerfMetric.Gpu => MakeGpuGlyph(18),
+                    _ => MakeMemoryGlyph(18)
+                });
+            }
+            _value = MakeText("--", -1);
+            _value.Margin = new Thickness(metric == PerfMetric.Network ? 0 : 4 * s, 0, 0, 0);
+            sp.Children.Add(_value);
+            Pill.Child = sp;
+            Pill.Padding = new Thickness(0);
+            // 固定宽度:数值在 "0%" 与 "100%" 间变化时不让胶囊抖动。
+            Pill.Width = (metric == PerfMetric.Network ? 88 : 58) * s;
+            Pill.ToolTip = Caption;
+
+            IsVisibleChanged += (s2, e2) => SetActive(IsVisible);
+            Loaded += (s2, e2) => SetActive(IsVisible);
+            Unloaded += (s2, e2) => SetActive(false);
+        }
+
+        private string Caption => _metric switch
+        {
+            PerfMetric.Cpu => "CPU 占用率",
+            PerfMetric.Gpu => "GPU 占用率",
+            PerfMetric.Memory => "内存占用",
+            _ => "网络上下行"
+        };
+
+        protected override bool HasPanel => false;
+        protected override bool HoverOpensPanel => false;
+
+        private void SetActive(bool active)
+        {
+            if (_disposed) return;
+            active = active && IsVisible && IsLoaded;
+            if (active == _active) return;
+            _active = active;
+            var service = PerfService.Instance;
+            if (active)
+            {
+                service.AddRef();
+                service.Updated += OnSample;
+                var latest = service.Latest;
+                if (latest != null) Apply(latest);
+                return;
+            }
+            service.Updated -= OnSample;
+            service.ReleaseRef();
+        }
+
+        private void OnSample(PerfSample sample)
+        {
+            if (_disposed) return;
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!_disposed) Apply(sample);
+                }));
+            }
+            catch (InvalidOperationException) { }
+        }
+
+        private void Apply(PerfSample sample)
+        {
+            switch (_metric)
+            {
+                case PerfMetric.Cpu:
+                    _value.Text = FmtPercent(sample.CpuPercent);
+                    Pill.ToolTip = Caption + (sample.CpuPercent >= 0
+                        ? " — " + Math.Round(sample.CpuPercent) + "%"
+                        : "");
+                    break;
+                case PerfMetric.Gpu:
+                    var gpu = PickGpu(sample.Gpus);
+                    _value.Text = gpu == null ? "--" : FmtPercent(gpu.UtilPercent);
+                    Pill.ToolTip = gpu == null
+                        ? Caption
+                        : gpu.Name + (gpu.UtilPercent >= 0 ? " — " + Math.Round(gpu.UtilPercent) + "%" : "");
+                    break;
+                case PerfMetric.Memory:
+                    if (sample.MemTotalBytes <= 0)
+                    {
+                        _value.Text = "--";
+                        Pill.ToolTip = Caption;
+                    }
+                    else
+                    {
+                        double percent = 100.0 * sample.MemUsedBytes / sample.MemTotalBytes;
+                        _value.Text = FmtPercent(percent);
+                        Pill.ToolTip = "内存 已用 " + FmtGb(sample.MemUsedBytes) + " / "
+                            + FmtGb(sample.MemTotalBytes) + " (" + Math.Round(percent) + "%)";
+                    }
+                    break;
+                default:
+                    if (sample.NetUpBps < 0 && sample.NetDownBps < 0)
+                    {
+                        _value.Text = "--";
+                        Pill.ToolTip = Caption;
+                    }
+                    else
+                    {
+                        _value.Text = "↓" + FmtSpeed(sample.NetDownBps) + " ↑" + FmtSpeed(sample.NetUpBps);
+                        Pill.ToolTip = "网络 下行 " + FmtSpeedLong(sample.NetDownBps) + "/s,上行 "
+                            + FmtSpeedLong(sample.NetUpBps) + "/s";
+                    }
+                    break;
+            }
+        }
+
+        private static GpuAdapterInfo PickGpu(List<GpuAdapterInfo> gpus)
+        {
+            if (gpus == null || gpus.Count == 0) return null;
+            string want = App.Settings?.MonitorGpuLuid;
+            if (!string.IsNullOrEmpty(want))
+                foreach (var g in gpus)
+                    if (string.Equals(g.Luid, want, StringComparison.OrdinalIgnoreCase)) return g;
+            return gpus[0];
+        }
+
+        private static string FmtPercent(double v)
+            => v < 0 ? "--" : Math.Round(v).ToString() + "%";
+
+        private static string FmtGb(ulong bytes)
+            => (bytes / 1073741824.0).ToString("0.0");
+
+        private static string FmtSpeed(double bps)
+        {
+            if (bps < 0) return "--";
+            if (bps >= 1073741824) return (bps / 1073741824).ToString("0.0") + "G";
+            if (bps >= 1048576) return (bps / 1048576).ToString(bps >= 10485760 ? "0" : "0.0") + "M";
+            return (bps / 1024).ToString(bps >= 10240 ? "0" : "0.0") + "K";
+        }
+
+        private static string FmtSpeedLong(double bps)
+        {
+            if (bps < 0) return "未知";
+            if (bps >= 1073741824) return (bps / 1073741824).ToString("0.0") + " MB";
+            if (bps >= 1048576) return (bps / 1048576).ToString("0.0") + " MB";
+            if (bps >= 1024) return (bps / 1024).ToString("0.0") + " KB";
+            return Math.Round(bps) + " B";
+        }
+
+        public override void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            SetActive(false);
             base.Dispose();
         }
     }

@@ -531,6 +531,67 @@ namespace DesktopBar.UI
             _themedShapes.Add(path);
             return path;
         }
+
+        // 性能监测图标:统一 24 网格描边风格,随主题文字色变化。
+        private FrameworkElement StrokeGlyph(string data, double size, double thickness = 1.7)
+        {
+            var path = new Path
+            {
+                Data = Geometry.Parse(data),
+                Stroke = Ui.Brush(ThemeService.Text, 1),
+                StrokeThickness = thickness,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Stretch = Stretch.None
+            };
+            _themedShapes.Add(path);
+            var canvas = new Canvas { Width = 24, Height = 24 };
+            canvas.Children.Add(path);
+            return IconViewbox(size, canvas);
+        }
+
+        /// <summary>CPU 芯片:圆角封装 + 内核 + 四边引脚。</summary>
+        protected FrameworkElement MakeCpuGlyph(double size = 20)
+        {
+            return StrokeGlyph(
+                "M8.8,6.8 L15.2,6.8 Q17.2,6.8 17.2,8.8 L17.2,15.2 Q17.2,17.2 15.2,17.2 L8.8,17.2 Q6.8,17.2 6.8,15.2 L6.8,8.8 Q6.8,6.8 8.8,6.8 Z " +
+                "M9.8,9.8 L14.2,9.8 L14.2,14.2 L9.8,14.2 Z " +
+                "M9.5,4.6 L9.5,6.8 M14.5,4.6 L14.5,6.8 M9.5,17.2 L9.5,19.4 M14.5,17.2 L14.5,19.4 " +
+                "M4.6,9.5 L6.8,9.5 M4.6,14.5 L6.8,14.5 M17.2,9.5 L19.4,9.5 M17.2,14.5 L19.4,14.5",
+                size, 1.6);
+        }
+
+        /// <summary>显卡:板卡外形 + 风扇圆 + 供电槽 + 底部挡板脚。</summary>
+        protected FrameworkElement MakeGpuGlyph(double size = 21)
+        {
+            return StrokeGlyph(
+                "M3.2,7.2 L20.8,7.2 L20.8,15.8 L3.2,15.8 Z " +
+                "M6,11.5 A2.8,2.8 0 1 1 11.6,11.5 A2.8,2.8 0 1 1 6,11.5 " +
+                "M14.4,10 L18.8,10 M14.4,13 L18.8,13 " +
+                "M6,15.8 L6,18.2 M10,15.8 L10,18.2",
+                size, 1.6);
+        }
+
+        /// <summary>内存:内存条外形 + 四颗颗粒 + 底部金手指。</summary>
+        protected FrameworkElement MakeMemoryGlyph(double size = 21)
+        {
+            return StrokeGlyph(
+                "M4,7 L20,7 L20,16 L4,16 Z " +
+                "M6.2,8.8 L8.1,8.8 L8.1,14.2 L6.2,14.2 Z M9.4,8.8 L11.3,8.8 L11.3,14.2 L9.4,14.2 Z " +
+                "M12.6,8.8 L14.5,8.8 L14.5,14.2 L12.6,14.2 Z M15.8,8.8 L17.7,8.8 L17.7,14.2 L15.8,14.2 Z " +
+                "M6.5,16 L6.5,18.6 M10,16 L10,18.6 M13.5,16 L13.5,18.6 M17,16 L17,18.6",
+                size, 1.5);
+        }
+
+        /// <summary>网络:上行/下行双向箭头。</summary>
+        protected FrameworkElement MakeNetworkGlyph(double size = 21)
+        {
+            return StrokeGlyph(
+                "M7.8,19.6 L7.8,8.6 M4.2,12 L7.8,8.4 L11.4,12 " +
+                "M16.2,4.4 L16.2,15.4 M12.6,12 L16.2,15.6 L19.8,12",
+                size);
+        }
     }
 
     /// <summary>

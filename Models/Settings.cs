@@ -67,6 +67,14 @@ namespace DesktopBar.Models
         public bool AutoCheckUpdate { get; set; } = true;
         public bool AutoUpdate { get; set; } = false;
 
+        // 性能监测(频谱左侧的四个胶囊;采样线程只在任一胶囊可见时运行)
+        public bool ShowMonitorCpu { get; set; } = true;
+        public bool ShowMonitorGpu { get; set; } = true;
+        public bool ShowMonitorMemory { get; set; } = true;
+        public bool ShowMonitorNetwork { get; set; } = true;
+        /// <summary>要监测的 GPU(LUID "高32位:低32位");空 = 第一块显卡。</summary>
+        public string MonitorGpuLuid { get; set; } = "";
+
         // 设置窗口外观
         public bool SettingsFollowSystemTheme
         {

@@ -860,7 +860,70 @@ namespace DesktopBar
                 v => { S.ShowSpectrum = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
             body.Children.Add(ToggleRow("音量按钮", S.ShowVolume,
                 v => { S.ShowVolume = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
+
+            body.Children.Add(ToggleRow("CPU 占用率", S.ShowMonitorCpu,
+                v => { S.ShowMonitorCpu = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
+            body.Children.Add(ToggleRow("GPU 占用率", S.ShowMonitorGpu,
+                v =>
+                {
+                    S.ShowMonitorGpu = v;
+                    Save();
+                    App.Bar?.ApplyModuleVisibility();
+                    if (_gpuCombo != null) _gpuCombo.IsEnabled = v;
+                    if (v && (_gpuCombo == null || _gpuCombo.Items.Count == 0)) LoadGpuOptions();
+                }));
+            _gpuCombo = new ComboBox
+            {
+                Width = 230,
+                MinHeight = 32,
+                Style = (Style)FindResource("DarkCombo"),
+                DisplayMemberPath = nameof(DesktopBar.Services.GpuAdapterInfo.Name),
+                IsEnabled = S.ShowMonitorGpu
+            };
+            _gpuCombo.SelectionChanged += (s, e) =>
+            {
+                if (_updatingGpuCombo) return;
+                S.MonitorGpuLuid = (_gpuCombo.SelectedItem as DesktopBar.Services.GpuAdapterInfo)?.Luid ?? "";
+                Save();
+            };
+            body.Children.Add(Row("监测的 GPU", _gpuCombo));
+            body.Children.Add(ToggleRow("内存占用", S.ShowMonitorMemory,
+                v => { S.ShowMonitorMemory = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
+            body.Children.Add(ToggleRow("网络上下行", S.ShowMonitorNetwork,
+                v => { S.ShowMonitorNetwork = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
+            body.Children.Add(MakeHint("CPU、GPU、内存、网络胶囊位于音频频谱左侧;采样只在任一胶囊可见时进行。"
+                + "GPU 占用率来自系统 GPU 引擎计数器,多显卡时可在上方选择要监测的 GPU。"));
             ModulesHost.Children.Add(card);
+
+            if (S.ShowMonitorGpu) LoadGpuOptions();
+        }
+
+        private ComboBox _gpuCombo;
+        private bool _updatingGpuCombo;
+        private int _gpuLoadVersion;
+
+        private async void LoadGpuOptions()
+        {
+            int version = ++_gpuLoadVersion;
+            try
+            {
+                var gpus = await System.Threading.Tasks.Task.Run(DesktopBar.Services.PerfService.EnumerateGpus);
+                if (_gpuCombo == null || version != _gpuLoadVersion) return;
+                _updatingGpuCombo = true;
+                _gpuCombo.ItemsSource = gpus;
+                int selected = -1;
+                for (int i = 0; i < gpus.Count; i++)
+                    if (string.Equals(gpus[i].Luid, S.MonitorGpuLuid, StringComparison.OrdinalIgnoreCase))
+                    { selected = i; break; }
+                _gpuCombo.SelectedIndex = selected >= 0 ? selected : (gpus.Count > 0 ? 0 : -1);
+                _updatingGpuCombo = false;
+                if (gpus.Count == 0)
+                    _gpuCombo.IsEnabled = false;
+            }
+            catch (Exception ex)
+            {
+                App.Log("加载显卡列表失败: " + ex.Message);
+            }
         }
 
         // ---------- 通用 ----------
