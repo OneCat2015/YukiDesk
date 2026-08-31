@@ -17,6 +17,18 @@
 
 ![YukiDesk 设置窗口](docs/screenshot-settings.png)
 
+小文件夹悬停展开:48px 图标面板向下展开,单击文件直接打开,拖文件到选项卡即复制进去:
+
+![小文件夹展开](docs/screenshot-folder-panel.png)
+
+时间悬停展开:星期、日期、农历(丙午马年 七月十九):
+
+![时间展开](docs/screenshot-clock.png)
+
+音乐播放器与频谱:播放音乐时自动出现,悬停展开大封面、曲名、歌手与播放控制,左侧频谱随节拍跳动,旁边是 CPU/GPU/内存/网络性能胶囊:
+
+![音乐播放器与性能监测](docs/screenshot-music.png)
+
 ## 构建与运行
 
 ```bash
