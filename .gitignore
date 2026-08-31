@@ -13,3 +13,5 @@
 # Local screenshots and Windows reserved placeholder
 _shot_*.png
 NUL
+packaging-log.txt
+publish/
