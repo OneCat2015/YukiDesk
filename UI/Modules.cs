@@ -590,7 +590,9 @@ namespace DesktopBar.UI
             };
             IconCache.LoadAsync(f.FullName, isDir, f.Extension, icon =>
             {
-                if (!_disposed && Open && img.IsVisible) img.Source = icon;
+                // 缓存命中时会在 img 加入可视化树之前同步回调，此时 IsVisible 必为 false，
+                // 不能用它做守卫，否则真实图标会被静默丢弃、条目永远停在占位图标上。
+                if (!_disposed) img.Source = icon;
             });
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
 
@@ -955,7 +957,7 @@ namespace DesktopBar.UI
             };
             IconCache.LoadAsync(item.DataPath, item.IsDirectory, ext, icon =>
             {
-                if (Open && img.IsVisible) img.Source = icon;
+                if (!_disposed) img.Source = icon;
             });
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
             var name = new TextBlock
@@ -1138,20 +1140,26 @@ namespace DesktopBar.UI
 
         public static BitmapSource GetFallback(bool isDir, string ext)
         {
-            string key = (isDir ? "dir:" : "file:") + (ext ?? "").ToLowerInvariant();
+            int pixelSize = IconPixelSize();
+            string key = (isDir ? "dir:" : "file:") + pixelSize;
             lock (Gate)
             {
                 if (Fallbacks.TryGetValue(key, out var icon)) return icon;
-                icon = TypeIcon(isDir, ext);
+                // 占位也用 Windows 系统图标（imageres.dll 的文件夹/通用文件），
+                // 保证条目从出现到换上真实图标全程都是 Explorer 同款样式。
+                icon = NativeMethods.GetSystemTypeIcon(isDir, pixelSize) ?? TypeIcon(isDir, ext);
                 Fallbacks[key] = icon;
                 return icon;
             }
         }
 
+        private static int IconPixelSize()
+            => Math.Max(48, (int)Math.Ceiling(48 * Ui.Scale * 1.5));
+
         public static void LoadAsync(string fullPath, bool isDir, string ext, Action<BitmapSource> apply)
         {
             if (string.IsNullOrWhiteSpace(fullPath) || apply == null) return;
-            int pixelSize = Math.Max(48, (int)Math.Ceiling(48 * Ui.Scale * 1.5));
+            int pixelSize = IconPixelSize();
             string key = (isDir ? "dir:" : "file:") + fullPath.ToLowerInvariant() + "|" + pixelSize;
             BitmapSource cached;
             lock (Gate) Cache.TryGetValue(key, out cached);

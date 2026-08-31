@@ -443,15 +443,20 @@ namespace DesktopBar.Interop
                     finally { DestroyIcon(sfi.hIcon); }
                 }
 
-                // 3) 类型默认图标:文件夹 / 通用文件(imageres.dll 为 Win10/11 系统图标库)
-                string sys = Path.Combine(Environment.SystemDirectory, "imageres.dll");
-                var fallback = TryExtract(sys, isDir ? 3 : 2, pixelSize);
-                if (fallback != null) return fallback;
-
-                string shell32 = Path.Combine(Environment.SystemDirectory, "shell32.dll");
-                return TryExtract(shell32, isDir ? 3 : 1, pixelSize);
+                // 3) 类型默认图标:文件夹 / 通用文件
+                return GetSystemTypeIcon(isDir, pixelSize);
             }
             catch { return null; }
+        }
+
+        /// <summary>取 imageres.dll 的系统类型图标（文件夹/通用文件），始终是 Explorer 同款 Windows 图标。</summary>
+        public static BitmapSource GetSystemTypeIcon(bool isDir, int pixelSize)
+        {
+            string sys = Path.Combine(Environment.SystemDirectory, "imageres.dll");
+            var icon = TryExtract(sys, isDir ? 3 : 2, pixelSize);
+            if (icon != null) return icon;
+            string shell32 = Path.Combine(Environment.SystemDirectory, "shell32.dll");
+            return TryExtract(shell32, isDir ? 3 : 1, pixelSize);
         }
 
         // ---------- 桌面工作区预留 ----------
