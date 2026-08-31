@@ -72,9 +72,6 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-const
-  FILE_ATTRIBUTE_DIRECTORY = $10;
-
 // 扫描 .NET 桌面运行时安装目录，寻找 8.x 版本子目录。
 function DirHasNet8DesktopRuntime(root: string): Boolean;
 var
