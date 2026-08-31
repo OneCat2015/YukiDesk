@@ -59,6 +59,8 @@ namespace DesktopBar
             Log("YukiDesk 主窗口已显示");
             BuildTray();
             Log("YukiDesk 托盘已创建");
+            // GitHub 更新检查(设置-关于里可开关):首次延迟触发,避免拖慢启动。
+            UpdateService.StartAutoCheck();
         }
 
         private void BuildTray()
@@ -103,6 +105,13 @@ namespace DesktopBar
 
         public static void Save() => SettingsService.Save(Settings);
         public static void ApplyAndSave() { Save(); Bar?.ApplySettings(); }
+
+        /// <summary>托盘气泡通知(更新提醒等);托盘未创建或已退出时静默。</summary>
+        public static void ShowTrayBalloon(string title, string text)
+        {
+            var app = Application.Current as App;
+            try { app?._tray?.ShowBalloonTip(6000, title, text, Forms.ToolTipIcon.Info); } catch { }
+        }
         public static void ShowSettings()
         {
             Bar?.ClosePanels();

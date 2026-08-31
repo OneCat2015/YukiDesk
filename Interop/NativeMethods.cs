@@ -190,6 +190,21 @@ namespace DesktopBar.Interop
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
 
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr ShellExecuteW(IntPtr hwnd, string verb, string file, string args, string dir, int show);
+
+        /// <summary>用系统默认方式打开链接或程序(参数化 API,不拼接命令行)。</summary>
+        public static void ShellExecuteOpen(string target)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(target)) return;
+                if (ShellExecuteW(IntPtr.Zero, "open", target, null, null, 5 /*SW_SHOW*/) == IntPtr.Zero)
+                    App.Log("Shell 打开失败: " + target);
+            }
+            catch (Exception ex) { App.Log("Shell 打开异常: " + target + " — " + ex.Message); }
+        }
+
         [DllImport("shell32.dll")]
         private static extern int SHOpenFolderAndSelectItems(IntPtr pidlFolder, uint cidl, IntPtr[] apidl, uint flags);
 

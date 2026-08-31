@@ -56,6 +56,8 @@
                                  Checked="Nav_Checked" Tag="Modules"/>
                     <RadioButton Style="{StaticResource NavRadio}" Content="    通用"
                                  Checked="Nav_Checked" Tag="General"/>
+                    <RadioButton Style="{StaticResource NavRadio}" Content="    关于"
+                                 Checked="Nav_Checked" Tag="About"/>
                 </StackPanel>
 
                 <Grid x:Name="PagesGrid" Grid.Column="1">
@@ -73,6 +75,9 @@
                     </ScrollViewer>
                     <ScrollViewer Tag="General" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" RenderTransformOrigin="0.5,0.5" Visibility="Collapsed">
                         <StackPanel x:Name="GeneralHost" Margin="8,16,20,24"/>
+                    </ScrollViewer>
+                    <ScrollViewer Tag="About" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" RenderTransformOrigin="0.5,0.5" Visibility="Collapsed">
+                        <StackPanel x:Name="AboutHost" Margin="8,16,20,24"/>
                     </ScrollViewer>
                 </Grid>
             </Grid>

@@ -63,6 +63,10 @@ namespace DesktopBar.Models
         public bool ShowRecycleBin { get; set; } = true;
         public bool ShowSpectrum { get; set; } = true;
 
+        // 更新(经 GitHub Releases 检测与下载)
+        public bool AutoCheckUpdate { get; set; } = true;
+        public bool AutoUpdate { get; set; } = false;
+
         // 设置窗口外观
         public bool SettingsFollowSystemTheme
         {

@@ -1,7 +1,8 @@
 ; YukiDesk 安装包脚本（Inno Setup 6）
 ; 不要直接运行本文件，请使用 packaging.cmd；它会对每个架构执行：
-;   iscc /DARCH=x64 installer.iss    或    iscc /DARCH=arm64 installer.iss
-; 发布目录 publish\win-<arch> 由 packaging.cmd 先用 dotnet publish 生成（自带 .NET 运行时）。
+;   iscc /DARCH=x64 /DFLAVOR=full installer.iss   ← 自带 .NET 8 运行时（完整版）
+;   iscc /DARCH=x64 /DFLAVOR=slim installer.iss   ← 依赖系统 .NET 8 桌面运行时（精简版）
+; 发布目录 publish\win-<arch>(full) / publish\win-<arch>-slim(slim) 由 packaging.cmd 先生成。
 
 #ifndef ARCH
   #error 请用 /DARCH 指定架构：x64 或 arm64
@@ -10,8 +11,21 @@
   #error ARCH 只能是 x64 或 arm64
 #endif
 
+#ifndef FLAVOR
+  #error 请用 /DFLAVOR 指定打包类型：full（自带 .NET 运行时）或 slim（依赖系统 .NET 8）
+#endif
+#if (FLAVOR != "full") && (FLAVOR != "slim")
+  #error FLAVOR 只能是 full 或 slim
+#endif
+
+#if FLAVOR == "full"
+  #define PublishDir "publish\win-" + ARCH
+#else
+  #define PublishDir "publish\win-" + ARCH + "-slim"
+#endif
+
 #define MyAppName "YukiDesk"
-#define MyAppExe "publish\win-" + ARCH + "\YukiDesk.exe"
+#define MyAppExe PublishDir + "\YukiDesk.exe"
 #define MyAppVersion GetVersionNumbersString(AddBackslash(SourcePath) + MyAppExe)
 
 [Setup]
@@ -21,10 +35,10 @@ AppVersion={#MyAppVersion}
 AppPublisher=YukiDesk
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-UninstallDisplayName={#MyAppName} {#ARCH}
+UninstallDisplayName={#MyAppName} {#ARCH} {#FLAVOR}
 UninstallDisplayIcon={app}\{#MyAppExe}
 OutputDir=installers
-OutputBaseFileName=YukiDesk-Setup-{#ARCH}-{#MyAppVersion}
+OutputBaseFileName=YukiDesk-Setup-{#ARCH}-{#FLAVOR}-{#MyAppVersion}
 ; 本程序数据全部在 %AppData%\YukiDesk，按每用户安装，无需管理员权限
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible or arm64
@@ -47,7 +61,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "publish\win-{#ARCH}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
@@ -58,6 +72,38 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+const
+  FILE_ATTRIBUTE_DIRECTORY = $10;
+
+// 扫描 .NET 桌面运行时安装目录，寻找 8.x 版本子目录。
+function DirHasNet8DesktopRuntime(root: string): Boolean;
+var
+  fr: TFindRec;
+begin
+  Result := False;
+  if not DirExists(root) then Exit;
+  if FindFirst(AddBackslash(root) + '*', fr) then
+  try
+    repeat
+      if (fr.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        if Copy(fr.Name, 1, 2) = '8.' then
+        begin
+          Result := True;
+          Exit;
+        end;
+    until not FindNext(fr);
+  finally
+    FindClose(fr);
+  end;
+end;
+
+function HasNet8DesktopRuntime(): Boolean;
+begin
+  Result :=
+    DirHasNet8DesktopRuntime(ExpandConstant('{pf}\dotnet\shared\Microsoft.WindowsDesktop.App')) or
+    DirHasNet8DesktopRuntime(ExpandConstant('{localappdata}\Microsoft\dotnet\shared\Microsoft.WindowsDesktop.App'));
+end;
+
 function InitializeSetup(): Boolean;
 begin
   Result := True;
@@ -68,6 +114,18 @@ begin
     MsgBox('此安装包为 ARM64 版本，请在 Windows on ARM 设备上运行。' + #13#10 +
            'x64 设备请使用 YukiDesk-Setup-x64 安装包。', mbCriticalError, MB_OK);
     Result := False;
+    Exit;
+  end;
+#endif
+#if FLAVOR == "slim"
+  // slim 版不自带 .NET 运行时，检测不到 8.x 桌面运行时时提示但允许继续。
+  if not HasNet8DesktopRuntime() then
+  begin
+    if MsgBox('此安装包为精简版（不自带 .NET 8 运行时），而系统中未检测到 .NET 8 桌面运行时。' + #13#10 +
+              '没有它 YukiDesk 将无法启动。建议改用文件名带 full 的完整版安装包，' + #13#10 +
+              '或先到 dotnet.microsoft.com 安装 ".NET Desktop Runtime 8"。' + #13#10 + #13#10 +
+              '仍要继续安装吗？', mbConfirmation, MB_YESNO) = IDNO then
+      Result := False;
   end;
 #endif
 end;

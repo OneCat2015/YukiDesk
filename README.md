@@ -20,9 +20,14 @@ bin/Release/net8.0-windows10.0.19041.0/YukiDesk.exe
 
 支持 **x64 与 ARM64** 两种架构;日常构建无需指定架构,`dotnet build` 产物跟随当前机器。
 
-## 打包安装程序(x64 + ARM64)
+## 打包安装程序(x64 + ARM64,完整版 + 精简版)
 
-安装包为**自包含**发布:把 .NET 8 桌面运行时等全部依赖一并打进安装程序,用户机器**无需预装任何运行时**,双击安装即可。安装为**每用户**模式(无需管理员权限),程序数据仍保存在 `%AppData%\YukiDesk`。
+每次打包生成 **4 个**安装程序:x64 / ARM64 两种架构 × **full / slim** 两种运行时类型:
+
+- **full(完整版)**:**自包含**发布,把 .NET 8 桌面运行时等全部依赖一并打进安装程序,用户机器**无需预装任何运行时**;体积较大,推荐大多数用户使用。
+- **slim(精简版)**:**框架依赖**发布,不含 .NET 运行时,体积小;要求系统**已安装 [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)**,未检测到时安装器会给出提示。
+
+两种安装包均为**每用户**模式(无需管理员权限),程序数据仍保存在 `%AppData%\YukiDesk`。
 
 一次性准备(仅首次):安装 Inno Setup 6,
 
@@ -37,15 +42,18 @@ cd YukiDesk
 packaging.cmd
 ```
 
-脚本依次完成:对 `win-x64`、`win-arm64` 执行 `dotnet publish -c Release -r <rid> --self-contained true`(输出到 `publish\win-<arch>\`),再调用 Inno Setup 按 `installer.iss` 生成安装包。产物:
+脚本依次完成:对 `win-x64`、`win-arm64` 分别执行 `dotnet publish -c Release -r <rid> --self-contained true`(full,输出到 `publish\win-<arch>\`)和 `--self-contained false`(slim,输出到 `publish\win-<arch>-slim\`),再对每种组合调用 Inno Setup 按 `installer.iss` 生成安装包。产物:
 
 ```
-installers\YukiDesk-Setup-x64-<版本>.exe      ← x64 设备(含 Windows on ARM 的 x64 模拟)
-installers\YukiDesk-Setup-arm64-<版本>.exe    ← 仅 ARM64 设备
+installers\YukiDesk-Setup-x64-full-<版本>.exe    ← x64 设备,自带运行时(含 Windows on ARM 的 x64 模拟)
+installers\YukiDesk-Setup-x64-slim-<版本>.exe    ← x64 设备,需已装 .NET 8 桌面运行时
+installers\YukiDesk-Setup-arm64-full-<版本>.exe  ← 仅 ARM64 设备,自带运行时
+installers\YukiDesk-Setup-arm64-slim-<版本>.exe  ← 仅 ARM64 设备,需已装 .NET 8 桌面运行时
 ```
 
 - 版本号取自 `DesktopBar.csproj` 的 `<Version>`,自动出现在安装包文件名与"应用和功能"里;发版只需改这一处。
 - ARM64 安装包在非 ARM 设备上会拒绝安装;x64 安装包可在 ARM64 设备上以模拟方式运行,但不推荐。
+- full 与 slim 使用同一个 AppId,可互相覆盖升级;精简版缺运行时时安装器会警告。
 - 安装包自带可选桌面快捷方式;开机自启仍由程序内设置控制(写入 HKCU),安装器不修改启动项。
 - 若需单独发布便携版(免安装),执行 `dotnet publish -c Release -r win-x64 --self-contained true -o publish\win-x64` 后直接运行 `publish\win-x64\YukiDesk.exe`。
 
@@ -66,12 +74,15 @@ installers\YukiDesk-Setup-arm64-<版本>.exe    ← 仅 ARM64 设备
 - **外观**:统一选项卡/展开页色盘、文字与图标颜色、透明度、缩放、边框开关与颜色、壁纸明暗自动适配(手动指定颜色后自动适配自动关闭)；设置窗口可单独跟随 Windows 深浅色并提供自定义最小化/最大化/关闭按钮，全部实时生效。
 - **小文件夹**:存储路径(默认 `程序目录\MiniFolders`,可改)、新建/重命名/移除。
 - **通用**:开机自启、悬停关闭延迟、动画时长、桌面顶部空间预留,以及"模块显示"开关(电源/小文件夹/回收站/音乐播放器/音频频谱/音量,全部即时生效)。预留开启后通过 Shell AppBar 向 Explorer 注册顶栏占用区域；托盘菜单可打开设置、显示/隐藏顶栏、打开数据目录或退出。
+- **关于**:显示当前版本、跳转 GitHub 项目主页;软件更新通过 GitHub Releases 实现,可开关"自动检查更新""自动下载更新",也可手动"检查更新";系统开启代理时自动走系统代理。发现新版本后先下载再询问,确认才安装(安装时会退出 YukiDesk 并启动安装程序,配置与小文件夹不受影响)。
 
 ## 使用方法
 
 ### 安装
 
-从 [Releases](../../releases) 下载对应架构的安装包（普通 Intel/AMD 电脑选 `x64`，Windows on ARM 设备选 `arm64`），双击安装。安装包内置全部运行时依赖，无需预装 .NET。安装为每用户模式，不需要管理员权限。
+从 [Releases](../../releases) 下载安装包:普通 Intel/AMD 电脑选 `x64`,Windows on ARM 设备选 `arm64`;不确定或想省事选文件名带 `full` 的**完整版**(自带运行时),已装 .NET 8 桌面运行时可选 `slim` **精简版**(体积更小)。双击安装即可,每用户模式,不需要管理员权限。
+
+程序内置更新检查(设置 → 关于):可自动检查/自动下载更新,或手动检查;新版本发布在 GitHub Releases,检测与下载自动使用系统代理。
 
 ### 日常操作
 
@@ -98,6 +109,7 @@ YukiDesk/
 │   ├── MediaService     SMTC 全局媒体会话(曲名/封面/进度/控制)
 │   ├── VolumeService    MMDevice COM 音量/静音/设备枚举 + WinRT 设备名
 │   ├── SettingsService  设置读写(原子写 + 备份 + 损坏隔离)
+│   ├── UpdateService    GitHub Releases 更新检查/下载(系统代理、按架构与运行时类型选包)
 │   └── AutoStartService 开机自启(当前用户 Run 键)
 ├── UI/
 │   ├── ModuleBase       模块基类:选项卡 + 悬停展开面板框架

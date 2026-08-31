@@ -1,6 +1,8 @@
 @echo off
-rem YukiDesk one-click packaging: publish win-x64 / win-arm64 (self-contained)
-rem and build setup installers with Inno Setup. Output goes to installers\.
+rem YukiDesk one-click packaging. Builds 4 setup installers:
+rem   YukiDesk-Setup-<arch>-full-<ver>.exe  self-contained (bundles .NET 8 runtime)
+rem   YukiDesk-Setup-<arch>-slim-<ver>.exe  framework-dependent (needs .NET 8 Desktop Runtime)
+rem for arch = x64 / arm64. Output goes to installers\.
 rem Requirements: .NET 8 SDK and Inno Setup 6 (winget install JRSoftware.InnoSetup).
 setlocal
 cd /d "%~dp0"
@@ -17,17 +19,31 @@ if not exist "%ISCC%" (
 
 for %%A in (x64 arm64) do (
     echo.
-    echo ========== [%%A] dotnet publish ==========
+    echo ========== [%%A full] dotnet publish ==========
     dotnet publish -c Release -r win-%%A --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o "publish\win-%%A"
     if errorlevel 1 (
-        echo [ERROR] publish failed for win-%%A
+        echo [ERROR] publish failed for win-%%A full
         exit /b 1
     )
 
-    echo ========== [%%A] Inno Setup ==========
-    "%ISCC%" /DARCH=%%A installer.iss
+    echo ========== [%%A full] Inno Setup ==========
+    "%ISCC%" /DARCH=%%A /DFLAVOR=full installer.iss
     if errorlevel 1 (
-        echo [ERROR] installer failed for win-%%A
+        echo [ERROR] installer failed for win-%%A full
+        exit /b 1
+    )
+
+    echo ========== [%%A slim] dotnet publish ==========
+    dotnet publish -c Release -r win-%%A --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -o "publish\win-%%A-slim"
+    if errorlevel 1 (
+        echo [ERROR] publish failed for win-%%A slim
+        exit /b 1
+    )
+
+    echo ========== [%%A slim] Inno Setup ==========
+    "%ISCC%" /DARCH=%%A /DFLAVOR=slim installer.iss
+    if errorlevel 1 (
+        echo [ERROR] installer failed for win-%%A slim
         exit /b 1
     )
 )

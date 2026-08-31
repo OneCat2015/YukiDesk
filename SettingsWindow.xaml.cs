@@ -36,6 +36,7 @@ namespace DesktopBar
             BuildFoldersPage();
             BuildModulesPage();
             BuildGeneralPage();
+            BuildAboutPage();
             ShowPage("Appearance");
             ThemeService.Changed += OnThemeChanged;
             ApplyWindowTheme();
@@ -891,6 +892,63 @@ namespace DesktopBar
             b2.Children.Add(MakeHint("配置文件:" + Path.Combine(App.AppDataDir, "settings.json") +
                                      "\n日志文件:" + Path.Combine(App.AppDataDir, "log.txt")));
             GeneralHost.Children.Add(card2);
+        }
+
+        // ---------- 关于 ----------
+        private TextBlock _updateStatus;
+        private Button _checkButton;
+
+        private void BuildAboutPage()
+        {
+            AboutHost.Children.Clear();
+
+            var about = Card("关于 YukiDesk",
+                "一款常驻 Windows 桌面层的顶栏小工具:小文件夹、音乐播放器、音量、回收站、音频频谱,外观全部可自定义。", out var ab);
+            var verTb = new TextBlock
+            {
+                Text = "v" + UpdateService.CurrentVersion.ToString(3),
+                FontSize = 12.5,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            verTb.SetResourceReference(TextElement.ForegroundProperty, "SettingsSubTextBrush");
+            ab.Children.Add(Row("当前版本", verTb));
+            var ghBtn = new Button { Content = "打开 GitHub 主页", Style = (Style)FindResource("Btn") };
+            ghBtn.Click += (s, e) => NativeMethods.ShellExecuteOpen("https://github.com/Akiyuki1130/YukiDesk");
+            ab.Children.Add(Row("项目主页", ghBtn));
+            ab.Children.Add(MakeHint("github.com/Akiyuki1130/YukiDesk\n如果 YukiDesk 对你有帮助,欢迎去点一个 Star。"));
+            AboutHost.Children.Add(about);
+
+            var upd = Card("软件更新",
+                "通过 GitHub Releases 检测与下载更新;系统开了代理时自动走系统代理。", out var ub);
+            ub.Children.Add(ToggleRow("自动检查更新", S.AutoCheckUpdate, v => { S.AutoCheckUpdate = v; Save(); }));
+            ub.Children.Add(ToggleRow("自动下载更新", S.AutoUpdate, v => { S.AutoUpdate = v; Save(); }));
+            _checkButton = new Button { Content = "检查更新", Style = (Style)FindResource("BtnAccent") };
+            _checkButton.Click += async (s, e) =>
+            {
+                if (UpdateService.Busy) return;
+                _checkButton.IsEnabled = false;
+                try { await UpdateService.RunCheckAsync(SetUpdateStatus, autoDownload: S.AutoUpdate); }
+                finally { _checkButton.IsEnabled = true; }
+            };
+            ub.Children.Add(Row("手动检查更新", _checkButton));
+            _updateStatus = new TextBlock
+            {
+                Text = "",
+                FontSize = 11.5,
+                Margin = new Thickness(0, 10, 0, 0),
+                TextWrapping = TextWrapping.Wrap
+            };
+            _updateStatus.SetResourceReference(TextElement.ForegroundProperty, "SettingsSubTextBrush");
+            ub.Children.Add(_updateStatus);
+            ub.Children.Add(MakeHint("「自动下载更新」需要开启「自动检查更新」;下载完成后会先询问,确认后才安装。" +
+                                     "安装新版本时会退出 YukiDesk 并启动安装程序,设置与小文件夹不会丢失。", 14));
+            AboutHost.Children.Add(upd);
+        }
+
+        private void SetUpdateStatus(string text)
+        {
+            if (_updateStatus == null) return;
+            _updateStatus.Text = text;
         }
     }
 }
