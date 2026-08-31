@@ -2,6 +2,10 @@
 [Bb]in/
 [Oo]bj/
 
+# Packaging output (packaging.cmd)
+[Pp]ublish/
+[Ii]nstallers/
+
 # Local audit/hook state
 .mimosa/
 .zcode/

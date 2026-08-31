@@ -187,6 +187,27 @@ namespace DesktopBar.Interop
         public static int EmptyRecycleBin()
             => SHEmptyRecycleBin(IntPtr.Zero, null, SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND);
 
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
+
+        [DllImport("shell32.dll")]
+        private static extern int SHOpenFolderAndSelectItems(IntPtr pidlFolder, uint cidl, IntPtr[] apidl, uint flags);
+
+        /// <summary>在资源管理器中打开一个 Shell 命名空间路径（如回收站 CLSID）；成功返回 0。</summary>
+        public static int OpenShellNamespace(string parsingName)
+        {
+            if (SHParseDisplayName(parsingName, IntPtr.Zero, out IntPtr pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
+                return unchecked((int)0x8000FFFF);
+            try
+            {
+                return SHOpenFolderAndSelectItems(pidl, 0, null, 0);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(pidl);
+            }
+        }
+
         private const uint FO_DELETE = 3;
         private const ushort FOF_SILENT = 0x4;
         private const ushort FOF_NOCONFIRMATION = 0x10;

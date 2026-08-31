@@ -18,6 +18,37 @@ bin/Release/net8.0-windows10.0.19041.0/YukiDesk.exe
 
 要求:Windows 10 1809+ / Windows 11,已安装 .NET 8 SDK(构建)或 .NET 8 Desktop Runtime(仅运行)。
 
+支持 **x64 与 ARM64** 两种架构;日常构建无需指定架构,`dotnet build` 产物跟随当前机器。
+
+## 打包安装程序(x64 + ARM64)
+
+安装包为**自包含**发布:把 .NET 8 桌面运行时等全部依赖一并打进安装程序,用户机器**无需预装任何运行时**,双击安装即可。安装为**每用户**模式(无需管理员权限),程序数据仍保存在 `%AppData%\YukiDesk`。
+
+一次性准备(仅首次):安装 Inno Setup 6,
+
+```bash
+winget install JRSoftware.InnoSetup
+```
+
+后期每次打包,始终使用同一脚本,不要手动改参数:
+
+```bash
+cd YukiDesk
+packaging.cmd
+```
+
+脚本依次完成:对 `win-x64`、`win-arm64` 执行 `dotnet publish -c Release -r <rid> --self-contained true`(输出到 `publish\win-<arch>\`),再调用 Inno Setup 按 `installer.iss` 生成安装包。产物:
+
+```
+installers\YukiDesk-Setup-x64-<版本>.exe      ← x64 设备(含 Windows on ARM 的 x64 模拟)
+installers\YukiDesk-Setup-arm64-<版本>.exe    ← 仅 ARM64 设备
+```
+
+- 版本号取自 `DesktopBar.csproj` 的 `<Version>`,自动出现在安装包文件名与"应用和功能"里;发版只需改这一处。
+- ARM64 安装包在非 ARM 设备上会拒绝安装;x64 安装包可在 ARM64 设备上以模拟方式运行,但不推荐。
+- 安装包自带可选桌面快捷方式;开机自启仍由程序内设置控制(写入 HKCU),安装器不修改启动项。
+- 若需单独发布便携版(免安装),执行 `dotnet publish -c Release -r win-x64 --self-contained true -o publish\win-x64` 后直接运行 `publish\win-x64\YukiDesk.exe`。
+
 ## 功能说明
 
 | 功能 | 用法 |
@@ -35,6 +66,55 @@ bin/Release/net8.0-windows10.0.19041.0/YukiDesk.exe
 - **外观**:统一选项卡/展开页色盘、文字与图标颜色、透明度、缩放、边框开关与颜色、壁纸明暗自动适配(手动指定颜色后自动适配自动关闭)；设置窗口可单独跟随 Windows 深浅色并提供自定义最小化/最大化/关闭按钮，全部实时生效。
 - **小文件夹**:存储路径(默认 `程序目录\MiniFolders`,可改)、新建/重命名/移除。
 - **通用**:开机自启、悬停关闭延迟、动画时长、桌面顶部空间预留,以及"模块显示"开关(电源/小文件夹/回收站/音乐播放器/音频频谱/音量,全部即时生效)。预留开启后通过 Shell AppBar 向 Explorer 注册顶栏占用区域；托盘菜单可打开设置、显示/隐藏顶栏、打开数据目录或退出。
+
+## 使用方法
+
+### 安装
+
+从 [Releases](../../releases) 下载对应架构的安装包（普通 Intel/AMD 电脑选 `x64`，Windows on ARM 设备选 `arm64`），双击安装。安装包内置全部运行时依赖，无需预装 .NET。安装为每用户模式，不需要管理员权限。
+
+### 日常操作
+
+- **展开面板**:鼠标悬停在对应选项卡上即可展开（回收站是单击展开）；移开后延迟自动收回，可在设置中调整延迟。
+- **小文件夹**:单击文件直接打开；把任意文件/文件夹拖到选项卡或面板上即复制进该文件夹；面板内支持右键菜单（粘贴）。
+- **回收站**:单击项目还原到原位置；右键垃圾桶按钮可"清空回收站"（有确认弹窗）。
+- **音乐控制**:展开后点击上一首/暂停/下一首；进度条可用时可直接拖动跳转。
+- **音量**:滚轮或拖动滑块调节、点击喇叭静音、下拉框切换默认输出设备（仅在你主动操作时写入）。
+- **托盘图标**:右键托盘可打开设置、显示/隐藏顶栏、打开数据目录或退出；顶栏被隐藏时从托盘重新显示。
+- **开机自启**:在设置 → 通用里开关，写入当前用户注册表启动项，不需要管理员权限。
+- **卸载**:系统"设置 → 应用"或开始菜单卸载项即可移除；配置和日志保留在 `%AppData%\YukiDesk`，可手动删除。
+
+## 技术架构
+
+**技术栈**: C# / .NET 8 / WPF(`net8.0-windows10.0.19041.0`,引用 Windows SDK WinRT 投影),单进程 `YukiDesk.exe`,支持 x64 与 ARM64。全部原生 Windows API + 托管代码实现,无第三方运行时依赖。
+
+```
+YukiDesk/
+├── App.xaml(.cs)        应用入口:全局异常日志、单实例、托盘、设置加载
+├── MainWindow.cs        顶栏主窗口:桌面层钉底、AppBar 注册、模块布局
+├── Models/Settings.cs   设置模型(可持久化 POCO)
+├── Services/
+│   ├── SpectrumService  WASAPI 环回采集 + FFT 频谱分析(后台线程)
+│   ├── MediaService     SMTC 全局媒体会话(曲名/封面/进度/控制)
+│   ├── VolumeService    MMDevice COM 音量/静音/设备枚举 + WinRT 设备名
+│   ├── SettingsService  设置读写(原子写 + 备份 + 损坏隔离)
+│   └── AutoStartService 开机自启(当前用户 Run 键)
+├── UI/
+│   ├── ModuleBase       模块基类:选项卡 + 悬停展开面板框架
+│   ├── Modules.cs       小文件夹/回收站/音乐/频谱/音量等具体模块
+│   ├── SettingsWindow   设置窗口
+│   ├── ShellOpen        文件打开(资源管理器集成)
+│   └── FlyoutMenu 等    右键菜单/确认框等通用控件
+└── Interop/NativeMethods.cs  Win32 P/Invoke(SetWindowPos/AppBar/Shell 图标/注册表等)
+```
+
+关键实现机制:
+
+- **桌面层窗口**:WPF 透明分层窗口,`SetWindowPos` 钉在桌面装饰层之上、所有普通窗口之下,并可用 Shell AppBar 占位;每 3 秒保底重钉。
+- **频谱**:WASAPI 共享模式环回采集(专用后台线程)→ 2048 点 FFT(汉宁窗)→ 对数频段 → `CompositionTarget.Rendering` 合成帧驱动自绘,UI 线程零阻塞。
+- **媒体**:监听 Windows SMTC 全局会话,封面 SHA-256 缓存并在后台线程解码冻结后上屏;播放控制经 SMTC 发回播放器。
+- **Shell 集成**:`SHCreateItemFromParsingName`/`SHDefExtractIcon` 在专用 STA 线程队列提取文件图标;文件监视 + 版本号防陈旧;回收站经 `$R/$I` 命名空间枚举与还原。
+- **线程模型**:所有 Shell/磁盘/COM/解码重活都在后台线程,UI 线程只做布局与绘制;模块销毁与重建有完整的生命周期守卫。
 
 ## 数据位置
 
@@ -69,3 +149,7 @@ bin/Release/net8.0-windows10.0.19041.0/YukiDesk.exe
 - 音乐进度条仅在 SMTC 同时提供有效时长和定位能力时显示;不支持定位的播放器会隐藏整条进度条，避免出现不可用的拖动控件。
 - 音乐选项卡依赖播放器上报 SMTC;个别播放器关闭该功能时无法检测。
 - 个别音源不向系统上报时长,进度时间标签可能显示 0:00。
+
+## 声明
+
+本项目由人工主导设计、开发与测试，使用 AI 辅助完成部分代码编写、审查与文档整理。

@@ -851,13 +851,9 @@ namespace DesktopBar.UI
                 e.Handled = true;
                 try
                 {
-                    var psi = new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        UseShellExecute = false
-                    };
-                    psi.ArgumentList.Add("::{645FF040-5081-101B-9F08-00AA002F954E}");
-                    System.Diagnostics.Process.Start(psi);
+                    // 回收站 CLSID 是固定常量；走 Shell 命名空间 API，不启动子进程。
+                    int hr = NativeMethods.OpenShellNamespace("::{645FF040-5081-101B-9F08-00AA002F954E}");
+                    if (hr != 0) App.Log("打开回收站 hr=0x" + hr.ToString("X8"));
                 }
                 catch (Exception ex) { App.Log("打开回收站失败: " + ex.Message); }
             };
