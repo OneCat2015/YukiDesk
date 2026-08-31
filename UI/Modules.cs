@@ -534,9 +534,9 @@ namespace DesktopBar.UI
                 _wrap.Children.Clear();
                 int cols = Math.Min(4, Math.Max(1, items.Count));
                 // 最多四列；为四列预留完整 viewport，细滚动条不会把第四列挤到下一行。
-                double cell = 88 * Ui.Scale;
+                double cell = 76 * Ui.Scale;
                 _wrap.Width = cols * cell;
-                Panel.Width = (cols * 90 + 28) * Ui.Scale;
+                Panel.Width = (cols * 76 + 26) * Ui.Scale;
 
                 const int batchSize = 8;
                 for (int index = 0; index < items.Count; index += batchSize)
@@ -580,8 +580,8 @@ namespace DesktopBar.UI
             double scale = Ui.Scale;
             var img = new Image
             {
-                Width = 48 * scale,
-                Height = 48 * scale,
+                Width = 40 * scale,
+                Height = 40 * scale,
                 Source = IconCache.GetFallback(isDir, f.Extension),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Stretch = Stretch.Uniform,
@@ -614,8 +614,8 @@ namespace DesktopBar.UI
             };
             var sp = new StackPanel
             {
-                Width = 80 * scale,
-                Margin = new Thickness(4 * scale, 8 * scale, 4 * scale, 8 * scale)
+                Width = 68 * scale,
+                Margin = new Thickness(3 * scale, 8 * scale, 3 * scale, 8 * scale)
             };
             sp.Children.Add(img);
             sp.Children.Add(name);
@@ -924,9 +924,9 @@ namespace DesktopBar.UI
                 _emptyHint.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
                 _wrap.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
                 int cols = Math.Min(4, Math.Max(1, items.Count));
-                double cell = 88 * Ui.Scale;
+                double cell = 76 * Ui.Scale;
                 _wrap.Width = cols * cell;
-                Panel.Width = empty ? 190 * Ui.Scale : (cols * 90 + 28) * Ui.Scale;
+                Panel.Width = empty ? 190 * Ui.Scale : (cols * 76 + 26) * Ui.Scale;
 
                 const int batchSize = 8;
                 for (int index = 0; index < items.Count; index += batchSize)
@@ -947,8 +947,8 @@ namespace DesktopBar.UI
             string ext = FilePath.GetExtension(item.DataPath);
             var img = new Image
             {
-                Width = 48 * scale,
-                Height = 48 * scale,
+                Width = 40 * scale,
+                Height = 40 * scale,
                 Source = IconCache.GetFallback(item.IsDirectory, ext),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Stretch = Stretch.Uniform,
@@ -971,7 +971,7 @@ namespace DesktopBar.UI
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 4 * scale, 0, 0)
             };
-            var sp = new StackPanel { Width = 80 * scale, Margin = new Thickness(4 * scale, 8 * scale, 4 * scale, 8 * scale) };
+            var sp = new StackPanel { Width = 68 * scale, Margin = new Thickness(3 * scale, 8 * scale, 3 * scale, 8 * scale) };
             sp.Children.Add(img);
             sp.Children.Add(name);
             var border = new Border
