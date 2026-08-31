@@ -42,7 +42,7 @@ namespace DesktopBar.UI
         {
             Pill.Width = 38 * Ui.Scale;
             Pill.Padding = new Thickness(0);
-            Pill.Child = CenterIcon(MakePowerGlyph(22));
+            Pill.Child = CenterIcon(MakePowerGlyph(20.5));
             Pill.MouseLeftButtonUp += (s, e) => ShowPanel();
         }
         protected override bool HoverOpensPanel => false;
@@ -843,7 +843,7 @@ namespace DesktopBar.UI
             Pill.Width = 38 * Ui.Scale;
             Pill.Padding = new Thickness(0);
             Pill.ToolTip = "回收站 — 单击展开，双击在资源管理器打开，右键清空";
-            Pill.Child = CenterIcon(MakeTrashGlyph(22));
+            Pill.Child = CenterIcon(MakeTrashGlyph(20.5));
             Pill.MouseLeftButtonUp += (s, e) => ShowPanel();
             Pill.MouseRightButtonUp += (s, e) => { ShowClearMenu(); e.Handled = true; };
             // 双击胶囊:直接打开回收站视图(SHOpenFolderAndSelectItems 会打开"父文件夹"即桌面,

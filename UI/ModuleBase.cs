@@ -376,6 +376,7 @@ namespace DesktopBar.UI
             };
         }
 
+        // 与应用图标(assets/YukiDesk.ico)同款:六条直臂从中心辐射,末端为实心三角箭头。
         protected FrameworkElement MakeSnowflakeGlyph(double size = 21)
         {
             var canvas = new Canvas { Width = 24, Height = 24 };
@@ -384,37 +385,36 @@ namespace DesktopBar.UI
             {
                 double a = -Math.PI / 2 + i * Math.PI / 3;
                 double ux = Math.Cos(a), uy = Math.Sin(a);
-                AddSnowLine(canvas, cx, cy, cx + ux * r, cy + uy * r, 1.5);
-                for (int tier = 0; tier < 2; tier++)
+                var line = new Line
                 {
-                    double pos = tier == 0 ? 0.52 : 0.8;
-                    double len = tier == 0 ? 3.6 : 2.7;
-                    double px = cx + ux * r * pos;
-                    double py = cy + uy * r * pos;
-                    foreach (double side in new[] { -1.0, 1.0 })
+                    X1 = cx, Y1 = cy,
+                    X2 = cx + ux * r * 0.60, Y2 = cy + uy * r * 0.60,
+                    Stroke = Ui.Brush(ThemeService.Text, 1),
+                    StrokeThickness = 1.6,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round
+                };
+                _themedShapes.Add(line);
+                canvas.Children.Add(line);
+
+                double tipX = cx + ux * r, tipY = cy + uy * r;
+                double baseX = cx + ux * r * 0.52, baseY = cy + uy * r * 0.52;
+                double nx = -uy, ny = ux;
+                const double halfW = 2.2;
+                var tri = new Polygon
+                {
+                    Points = new PointCollection
                     {
-                        double ba = a + side * Math.PI * 2 / 3;
-                        AddSnowLine(canvas, px, py,
-                            px + Math.Cos(ba) * len, py + Math.Sin(ba) * len,
-                            tier == 0 ? 1.3 : 1.15);
-                    }
-                }
+                        new Point(tipX, tipY),
+                        new Point(baseX + nx * halfW, baseY + ny * halfW),
+                        new Point(baseX - nx * halfW, baseY - ny * halfW)
+                    },
+                    Fill = Ui.Brush(ThemeService.Text, 1)
+                };
+                _themedFills.Add(tri);
+                canvas.Children.Add(tri);
             }
             return IconViewbox(size, canvas);
-        }
-
-        private void AddSnowLine(Canvas canvas, double x1, double y1, double x2, double y2, double thickness)
-        {
-            var line = new Line
-            {
-                X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
-                Stroke = Ui.Brush(ThemeService.Text, 1),
-                StrokeThickness = thickness,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round
-            };
-            _themedShapes.Add(line);
-            canvas.Children.Add(line);
         }
 
         protected FrameworkElement MakePowerGlyph(double size = 22)
