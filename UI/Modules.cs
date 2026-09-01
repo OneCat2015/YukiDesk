@@ -778,7 +778,8 @@ namespace DesktopBar.UI
             {
                 el.DragOver += (s, e) =>
                 {
-                    e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+                    if (!e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.None;
+                    else e.Effects = (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.Copy;
                     e.Handled = true;
                 };
                 el.Drop += (s, e) =>
@@ -789,7 +790,7 @@ namespace DesktopBar.UI
                 };
             }
         }
-        // 拖入采用复制语义，源文件保留在原位置。
+        // 拖入采用移动语义：源文件从原位置移走；与目标重名时弹窗选择替换或保留为副本。
         private void MoveInto(string[] files)
         {
             if (string.IsNullOrEmpty(Dir)) return;
@@ -797,6 +798,8 @@ namespace DesktopBar.UI
             {
                 Directory.CreateDirectory(Dir);
                 string destRoot = FilePath.GetFullPath(Dir).TrimEnd('\\', '/');
+                ConflictChoice? choice = null;
+                bool applyToAll = false;
                 foreach (var f in files ?? Array.Empty<string>())
                 {
                     if (string.IsNullOrEmpty(f)) continue;
@@ -806,7 +809,28 @@ namespace DesktopBar.UI
                     if (destRoot.StartsWith(full + "\\", StringComparison.OrdinalIgnoreCase)) continue;
                     string parent = FilePath.GetDirectoryName(full);
                     if (string.Equals(parent?.TrimEnd('\\', '/'), destRoot, StringComparison.OrdinalIgnoreCase)) continue;
-                    FileClipboard.TryPlace(f, Dir, move: false);
+
+                    string dest = FilePath.Combine(destRoot, FilePath.GetFileName(full));
+                    if (File.Exists(dest) || Directory.Exists(dest))
+                    {
+                        if (!applyToAll)
+                        {
+                            choice = ConfirmDialog.ShowConflict("存在同名项目",
+                                "“" + FilePath.GetFileName(dest) + "”已在此文件夹中。要替换它，还是把拖入的项保留为副本？",
+                                out applyToAll);
+                            if (choice == null) break; // 取消：中止剩余项
+                        }
+                        if (choice == ConflictChoice.Replace)
+                        {
+                            // 旧项目先移入回收站（可撤销），腾出原名后按原名移动；失败则跳过该项避免误留副本。
+                            if (!NativeMethods.DeleteToRecycleBin(new[] { dest }))
+                            {
+                                App.Log("替换失败，旧项目无法移入回收站: " + dest);
+                                continue;
+                            }
+                        }
+                    }
+                    FileClipboard.TryPlace(f, Dir, move: true);
                 }
                 LoadFiles();
             }
