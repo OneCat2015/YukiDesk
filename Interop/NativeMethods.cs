@@ -193,16 +193,26 @@ namespace DesktopBar.Interop
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr ShellExecuteW(IntPtr hwnd, string verb, string file, string args, string dir, int show);
 
-        /// <summary>用系统默认方式打开链接或程序(参数化 API,不拼接命令行)。</summary>
-        public static void ShellExecuteOpen(string target)
+        /// <summary>用系统默认方式打开链接或程序(参数化 API,不拼接命令行)。返回是否成功启动。</summary>
+        public static bool ShellExecuteOpen(string target)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(target)) return;
-                if (ShellExecuteW(IntPtr.Zero, "open", target, null, null, 5 /*SW_SHOW*/) == IntPtr.Zero)
-                    App.Log("Shell 打开失败: " + target);
+                if (string.IsNullOrWhiteSpace(target)) return false;
+                IntPtr result = ShellExecuteW(IntPtr.Zero, "open", target, null, null, 5 /*SW_SHOW*/);
+                long code = result.ToInt64();
+                if (code <= 32)
+                {
+                    App.Log("Shell 打开失败 code=" + code + ": " + target);
+                    return false;
+                }
+                return true;
             }
-            catch (Exception ex) { App.Log("Shell 打开异常: " + target + " — " + ex.Message); }
+            catch (Exception ex)
+            {
+                App.Log("Shell 打开异常: " + target + " — " + ex.Message);
+                return false;
+            }
         }
 
         [DllImport("shell32.dll")]
@@ -646,14 +656,22 @@ namespace DesktopBar.Interop
         private const uint EWX_LOGOFF = 0x00000000;
         private const uint EWX_SHUTDOWN = 0x00000001;
         private const uint EWX_REBOOT = 0x00000002;
-        private const uint EWX_FORCEIFHUNG = 0x00000010;
-        public static void Shutdown() => ExitWindowsEx(EWX_SHUTDOWN | EWX_FORCEIFHUNG, 0);
-        public static void Restart() => ExitWindowsEx(EWX_REBOOT | EWX_FORCEIFHUNG, 0);
-        public static void Sleep() => SetSuspendState(false, false, false);
-        public static void Lock() => LockWorkStation();
-        public static void DisplayOff()
+        public static bool Shutdown() => ExitWindowsEx(EWX_SHUTDOWN, 0);
+        public static bool Restart() => ExitWindowsEx(EWX_REBOOT, 0);
+        public static bool Sleep() => SetSuspendState(false, false, false);
+        public static bool Lock() => LockWorkStation();
+        public static bool DisplayOff()
         {
-            SendMessage((IntPtr)0xffff, 0x0112, (IntPtr)0xF170, (IntPtr)2);
+            try
+            {
+                SendMessage((IntPtr)0xffff, 0x0112, (IntPtr)0xF170, (IntPtr)2);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                App.Log("关闭显示器失败: " + ex.Message);
+                return false;
+            }
         }
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);

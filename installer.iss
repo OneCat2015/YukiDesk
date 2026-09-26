@@ -25,8 +25,8 @@
 #endif
 
 #define MyAppName "YukiDesk"
-#define MyAppExe PublishDir + "\YukiDesk.exe"
-#define MyAppVersion GetVersionNumbersString(AddBackslash(SourcePath) + MyAppExe)
+#define MyAppExe "YukiDesk.exe"
+#define MyAppVersion GetVersionNumbersString(AddBackslash(SourcePath) + PublishDir + "\YukiDesk.exe")
 
 [Setup]
 AppId={{7C4B6E5A-2D93-4B18-9F61-0A8C3E52D7F01}
@@ -59,6 +59,21 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+#if FLAVOR == "slim"
+[InstallDelete]
+; full -> slim 覆盖升级时只清理 self-contained 的 native .NET runtime 文件。
+Type: files; Name: "{app}\hostfxr.dll"
+Type: files; Name: "{app}\hostpolicy.dll"
+Type: files; Name: "{app}\coreclr.dll"
+Type: files; Name: "{app}\clrjit.dll"
+Type: files; Name: "{app}\ijwhost.dll"
+Type: files; Name: "{app}\createdump.exe"
+Type: files; Name: "{app}\mscordaccore*.dll"
+Type: files; Name: "{app}\mscordbi.dll"
+Type: files; Name: "{app}\vcruntime140_cor3.dll"
+Type: files; Name: "{app}\System.IO.Compression.Native.dll"
+#endif
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -42,13 +42,15 @@ namespace DesktopBar.UI
             var sp = new StackPanel();
             if (!string.IsNullOrEmpty(caption))
             {
-                sp.Children.Add(new TextBlock
+                var captionText = new TextBlock
                 {
                     Text = caption,
                     FontSize = 11 * s,
-                    Foreground = Ui.Brush(ThemeService.Text, 0.65),
+                    Opacity = 0.65,
                     Margin = new Thickness(6 * s, 2 * s, 6 * s, 6 * s)
-                });
+                };
+                captionText.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
+                sp.Children.Add(captionText);
             }
 
             Popup popup = null;
@@ -59,24 +61,25 @@ namespace DesktopBar.UI
                     Text = item.Text,
                     FontSize = 12.5 * s,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = item.Danger ? Ui.Brush("#F2777C") : Ui.Brush(ThemeService.Text, 1),
                     Opacity = item.Enabled ? 1 : 0.4
                 };
+                if (item.Danger) text.Foreground = Ui.Brush("#F2777C");
+                else text.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
                 // 静态半透明深色行（比菜单背景深一点），悬停加深。
                 var row = new Border
                 {
                     CornerRadius = new CornerRadius(8 * s),
                     Padding = new Thickness(10 * s, 7 * s, 10 * s, 7 * s),
                     MinWidth = 138 * s,
-                    Background = Ui.Brush("#000000", 0.16),
                     Child = text
                 };
+                row.SetResourceReference(Border.BackgroundProperty, "ThemePanelHover");
                 var captured = item;
                 if (item.Enabled)
                 {
                     row.Cursor = System.Windows.Input.Cursors.Hand;
-                    row.MouseEnter += (s2, e2) => row.Background = Ui.Brush("#000000", 0.30);
-                    row.MouseLeave += (s2, e2) => row.Background = Ui.Brush("#000000", 0.16);
+                    row.MouseEnter += (s2, e2) => row.SetResourceReference(Border.BackgroundProperty, "ThemePanelSelected");
+                    row.MouseLeave += (s2, e2) => row.SetResourceReference(Border.BackgroundProperty, "ThemePanelHover");
                     row.MouseLeftButtonUp += (s2, e2) =>
                     {
                         if (popup != null) popup.IsOpen = false;
@@ -89,12 +92,12 @@ namespace DesktopBar.UI
             var border = new Border
             {
                 CornerRadius = new CornerRadius(10 * s),
-                Background = (Brush)Application.Current.FindResource("ThemePanelBackground"),
-                BorderBrush = (Brush)Application.Current.FindResource("ThemePanelBorder"),
                 BorderThickness = new Thickness(1 * s),
                 Padding = new Thickness(6 * s),
                 Child = sp
             };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemePanelBackground");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemePanelBorder");
             popup = new Popup
             {
                 Child = border,

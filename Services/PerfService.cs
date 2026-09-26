@@ -364,29 +364,35 @@ namespace DesktopBar.Services
                 Guid iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387"); // IDXGIFactory1
                 if (PerfNative.CreateDXGIFactory1(ref iid, out var factory) != 0 || factory == null)
                     return list;
-
-                uint index = 0;
-                while (factory.EnumAdapters(index++, out var adapter) == 0)
+                try
                 {
-                    if (adapter == null) break;
-                    try
+                    uint index = 0;
+                    while (factory.EnumAdapters(index++, out var adapter) == 0)
                     {
-                        if (adapter.GetDesc(out var desc) != 0) continue;
-                        string name = desc.Description?.Trim();
-                        // "Microsoft Basic Render Driver" 是 WARP 软件渲染,不计入显卡列表。
-                        if (string.IsNullOrWhiteSpace(name)
-                            || name.Equals("Microsoft Basic Render Driver", StringComparison.OrdinalIgnoreCase))
-                            continue;
-                        string luid = ((uint)desc.LuidHigh).ToString("X8", CultureInfo.InvariantCulture)
-                            + ":" + desc.LuidLow.ToString("X8", CultureInfo.InvariantCulture);
-                        // 同名驱动节点(不同 LUID)只保留第一个,下拉框不出现重复项。
-                        if (list.Exists(g => string.Equals(g.Name, name, StringComparison.OrdinalIgnoreCase))) continue;
-                        list.Add(new GpuAdapterInfo { Name = name, Luid = luid, UtilPercent = -1 });
+                        if (adapter == null) break;
+                        try
+                        {
+                            if (adapter.GetDesc(out var desc) != 0) continue;
+                            string name = desc.Description?.Trim();
+                            // "Microsoft Basic Render Driver" 是 WARP 软件渲染,不计入显卡列表。
+                            if (string.IsNullOrWhiteSpace(name)
+                                || name.Equals("Microsoft Basic Render Driver", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            string luid = ((uint)desc.LuidHigh).ToString("X8", CultureInfo.InvariantCulture)
+                                + ":" + desc.LuidLow.ToString("X8", CultureInfo.InvariantCulture);
+                            // 同名驱动节点(不同 LUID)只保留第一个,下拉框不出现重复项。
+                            if (list.Exists(g => string.Equals(g.Name, name, StringComparison.OrdinalIgnoreCase))) continue;
+                            list.Add(new GpuAdapterInfo { Name = name, Luid = luid, UtilPercent = -1 });
+                        }
+                        finally
+                        {
+                            Marshal.ReleaseComObject(adapter);
+                        }
                     }
-                    finally
-                    {
-                        Marshal.ReleaseComObject(adapter);
-                    }
+                }
+                finally
+                {
+                    try { Marshal.ReleaseComObject(factory); } catch { }
                 }
             }
             catch (Exception ex)

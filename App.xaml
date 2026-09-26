@@ -9,37 +9,40 @@
         <SolidColorBrush x:Key="TextBrush" Color="#ECECF2"/>
         <SolidColorBrush x:Key="ThemePanelBackground" Color="#8C14141C"/>
         <SolidColorBrush x:Key="ThemePanelBorder" Color="#52FFFFFF"/>
+        <SolidColorBrush x:Key="ThemePanelSubtle" Color="#0FFFFFFF"/>
+        <SolidColorBrush x:Key="ThemePanelControl" Color="#14FFFFFF"/>
+        <SolidColorBrush x:Key="ThemePanelControlHover" Color="#2EFFFFFF"/>
         <SolidColorBrush x:Key="ThemePanelHover" Color="#24FFFFFF"/>
         <SolidColorBrush x:Key="ThemePanelSelected" Color="#3DFFFFFF"/>
         <SolidColorBrush x:Key="ThemePanelText" Color="#FFFFFF"/>
         <SolidColorBrush x:Key="SubTextBrush" Color="#9A9AA8"/>
-        <SolidColorBrush x:Key="SettingsWindowBackground" Color="#0E0E0E"/>
-        <SolidColorBrush x:Key="SettingsTitleBackground" Color="#141414"/>
-        <SolidColorBrush x:Key="SettingsWindowBorder" Color="#2E2E2E"/>
+        <SolidColorBrush x:Key="SettingsWindowBackground" Color="#1A1B21"/>
+        <SolidColorBrush x:Key="SettingsTitleBackground" Color="#202129"/>
+        <SolidColorBrush x:Key="SettingsWindowBorder" Color="#3A3C46"/>
         <SolidColorBrush x:Key="SettingsTextBrush" Color="#FFFFFF"/>
         <SolidColorBrush x:Key="SettingsSubTextBrush" Color="#E4E4E4"/>
         <SolidColorBrush x:Key="SettingsLabelBrush" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="SettingsHoverBackground" Color="#262626"/>
-        <SolidColorBrush x:Key="SettingsCardBackground" Color="#161616"/>
-        <SolidColorBrush x:Key="SettingsCardBorder" Color="#2C2C2C"/>
-        <SolidColorBrush x:Key="SettingsControlBackground" Color="#1E1E1E"/>
-        <SolidColorBrush x:Key="SettingsControlBorder" Color="#3A3A3A"/>
-        <SolidColorBrush x:Key="SettingsButtonBackground" Color="#232323"/>
-        <SolidColorBrush x:Key="SettingsButtonHover" Color="#303030"/>
-        <SolidColorBrush x:Key="SettingsButtonPressed" Color="#181818"/>
+        <SolidColorBrush x:Key="SettingsHoverBackground" Color="#2F313A"/>
+        <SolidColorBrush x:Key="SettingsCardBackground" Color="#23242C"/>
+        <SolidColorBrush x:Key="SettingsCardBorder" Color="#393B44"/>
+        <SolidColorBrush x:Key="SettingsControlBackground" Color="#2C2D35"/>
+        <SolidColorBrush x:Key="SettingsControlBorder" Color="#464850"/>
+        <SolidColorBrush x:Key="SettingsButtonBackground" Color="#31323B"/>
+        <SolidColorBrush x:Key="SettingsButtonHover" Color="#3C3E47"/>
+        <SolidColorBrush x:Key="SettingsButtonPressed" Color="#26272E"/>
         <SolidColorBrush x:Key="SettingsAccent" Color="#6C8CFF"/>
         <SolidColorBrush x:Key="SettingsAccentHover" Color="#7D9BFF"/>
         <SolidColorBrush x:Key="SettingsAccentPressed" Color="#5A78E6"/>
-        <SolidColorBrush x:Key="SettingsSwitchTrack" Color="#526EC4" Opacity="0.42"/>
-        <SolidColorBrush x:Key="SettingsSwitchThumb" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="SettingsSwitchThumbBorder" Color="#B9BFCF"/>
-        <SolidColorBrush x:Key="SettingsTrack" Color="#2E2E2E"/>
-        <SolidColorBrush x:Key="SettingsNavHover" Color="#262626"/>
+        <SolidColorBrush x:Key="SettingsSwitchTrack" Color="#465A9D" Opacity="0.62"/>
+        <SolidColorBrush x:Key="SettingsSwitchThumb" Color="#F5F5F5"/>
+        <SolidColorBrush x:Key="SettingsSwitchThumbBorder" Color="#5D5F68"/>
+        <SolidColorBrush x:Key="SettingsTrack" Color="#3A3C46"/>
+        <SolidColorBrush x:Key="SettingsNavHover" Color="#2F313A"/>
         <SolidColorBrush x:Key="SettingsNavSelected" Color="#6C8CFF"/>
-        <SolidColorBrush x:Key="SettingsSelected" Color="#303030"/>
-        <SolidColorBrush x:Key="SettingsListHover" Color="#3A3A3A"/>
-        <SolidColorBrush x:Key="SettingsPopupBackground" Color="#1A1A1A"/>
-        <SolidColorBrush x:Key="SettingsScrollThumb" Color="#484848"/>
+        <SolidColorBrush x:Key="SettingsSelected" Color="#3C3E47"/>
+        <SolidColorBrush x:Key="SettingsListHover" Color="#464850"/>
+        <SolidColorBrush x:Key="SettingsPopupBackground" Color="#272830"/>
+        <SolidColorBrush x:Key="SettingsScrollThumb" Color="#565861"/>
 
         <!-- 卡片容器 -->
         <Style x:Key="Card" TargetType="Border">
@@ -144,6 +147,82 @@
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="B" Property="Background" Value="#C93A40"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 半透明按钮（顶栏展开页用：与右键菜单行同款玻璃底，静置16%/悬停30%/按下38%） -->
+        <Style x:Key="BtnGlass" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource ThemePanelText}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="8" Background="{DynamicResource ThemePanelHover}" Padding="14,8">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{DynamicResource ThemePanelSelected}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{DynamicResource ThemePanelSelected}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 主题玻璃按钮：用于确认、提示和输入弹窗。 -->
+        <Style x:Key="BtnTheme" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource ThemePanelText}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="8" Background="{DynamicResource ThemePanelHover}" Padding="14,8">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{DynamicResource ThemePanelSelected}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{DynamicResource ThemePanelSelected}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 危险操作仍保留红色语义，但使用半透明玻璃底。 -->
+        <Style x:Key="BtnThemeDanger" TargetType="Button" BasedOn="{StaticResource BtnTheme}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="8" Background="#C9E5484D" Padding="14,8">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#E5F0595E"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#A8C93A40"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

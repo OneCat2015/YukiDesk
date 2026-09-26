@@ -19,12 +19,14 @@ if not exist "%ISCC%" (
 
 for %%A in (x64 arm64) do (
     echo.
-    echo ========== [%%A full] dotnet publish ==========
+    echo ========== [%%A full] clean and publish ==========
+    if exist "publish\win-%%A" rmdir /s /q "publish\win-%%A"
     dotnet publish -c Release -r win-%%A --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o "publish\win-%%A"
     if errorlevel 1 (
         echo [ERROR] publish failed for win-%%A full
         exit /b 1
     )
+    >"publish\win-%%A\yukidesk.runtime" echo full
 
     echo ========== [%%A full] Inno Setup ==========
     "%ISCC%" /DARCH=%%A /DFLAVOR=full installer.iss
@@ -33,12 +35,14 @@ for %%A in (x64 arm64) do (
         exit /b 1
     )
 
-    echo ========== [%%A slim] dotnet publish ==========
+    echo ========== [%%A slim] clean and publish ==========
+    if exist "publish\win-%%A-slim" rmdir /s /q "publish\win-%%A-slim"
     dotnet publish -c Release -r win-%%A --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -o "publish\win-%%A-slim"
     if errorlevel 1 (
         echo [ERROR] publish failed for win-%%A slim
         exit /b 1
     )
+    >"publish\win-%%A-slim\yukidesk.runtime" echo slim
 
     echo ========== [%%A slim] Inno Setup ==========
     "%ISCC%" /DARCH=%%A /DFLAVOR=slim installer.iss

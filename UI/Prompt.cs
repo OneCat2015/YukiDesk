@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using DesktopBar.Services;
 
 namespace DesktopBar.UI
 {
@@ -21,18 +22,22 @@ namespace DesktopBar.UI
                 Margin = new Thickness(0, 12, 0, 0),
                 FontSize = 13
             };
+            box.SetResourceReference(TextBox.ForegroundProperty, "ThemePanelText");
+            box.SetResourceReference(TextBox.CaretBrushProperty, "ThemePanelText");
+            box.SetResourceReference(TextBox.BackgroundProperty, "ThemePanelHover");
+            box.SetResourceReference(TextBox.BorderBrushProperty, "ThemePanelBorder");
 
             var btnCancel = new Button
             {
                 Content = "取消",
-                Style = (Style)Application.Current.FindResource("Btn"),
+                Style = (Style)Application.Current.FindResource("BtnTheme"),
                 IsCancel = true,
                 Margin = new Thickness(0, 18, 8, 0)
             };
             var btnOk = new Button
             {
                 Content = "确定",
-                Style = (Style)Application.Current.FindResource("BtnAccent"),
+                Style = (Style)Application.Current.FindResource("BtnTheme"),
                 IsDefault = true,
                 Margin = new Thickness(0, 18, 0, 0)
             };
@@ -48,15 +53,24 @@ namespace DesktopBar.UI
             btnRow.Children.Add(btnOk);
 
             var body = new StackPanel { Margin = new Thickness(22) };
-            body.Children.Add(new TextBlock
+            var labelText = new TextBlock
             {
                 Text = label,
-                FontSize = 13,
-                Foreground = Ui.Brush("#ECECF2")
-            });
+                FontSize = 13
+            };
+            labelText.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
+            body.Children.Add(labelText);
             body.Children.Add(box);
             body.Children.Add(btnRow);
 
+            var card = new Border
+            {
+                CornerRadius = new CornerRadius(12),
+                BorderThickness = new Thickness(1),
+                Child = body
+            };
+            card.SetResourceReference(Border.BackgroundProperty, "ThemePanelBackground");
+            card.SetResourceReference(Border.BorderBrushProperty, "ThemePanelBorder");
             var w = new Window
             {
                 Title = title,
@@ -69,14 +83,7 @@ namespace DesktopBar.UI
                 Topmost = true,
                 ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false,
-                Content = new Border
-                {
-                    CornerRadius = new CornerRadius(12),
-                    Background = Ui.Brush("#161622"),
-                    BorderBrush = Ui.Brush("#2A2A3C"),
-                    BorderThickness = new Thickness(1),
-                    Child = body
-                }
+                Content = card
             };
             btnCancel.Tag = w;
             btnOk.Tag = w;

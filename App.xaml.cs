@@ -30,7 +30,18 @@ namespace DesktopBar
                 lock (LogGate)
                 {
                     Directory.CreateDirectory(AppDataDir);
-                    File.AppendAllText(Path.Combine(AppDataDir, "log.txt"),
+                    string logPath = Path.Combine(AppDataDir, "log.txt");
+                    try
+                    {
+                        if (File.Exists(logPath) && new FileInfo(logPath).Length > 2 * 1024 * 1024)
+                        {
+                            string backup = logPath + ".1";
+                            try { if (File.Exists(backup)) File.Delete(backup); } catch { }
+                            try { File.Move(logPath, backup); } catch { }
+                        }
+                    }
+                    catch { }
+                    File.AppendAllText(logPath,
                         DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + msg + Environment.NewLine);
                 }
             }
@@ -94,6 +105,9 @@ namespace DesktopBar
 
         protected override void OnExit(ExitEventArgs e)
         {
+            try { UI.OperationProgressDialog.BeginShutdown(); } catch { }
+            try { Services.UpdateService.StopAutoCheck(); } catch { }
+            try { Services.ThemeService.Stop(); } catch { }
             try { DesktopSpaceService.Restore(); } catch { }
             try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); } } catch { }
             try { _trayIcon?.Dispose(); } catch { }

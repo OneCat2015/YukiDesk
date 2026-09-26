@@ -173,6 +173,9 @@ namespace DesktopBar.UI
                 resources["ThemePanelBorder"] = s != null && s.BorderEnabled
                     ? Ui.Brush(ThemeService.Border, s.BorderOpacity)
                     : Brushes.Transparent;
+                resources["ThemePanelSubtle"] = Ui.Brush(ThemeService.Text, 0.06);
+                resources["ThemePanelControl"] = Ui.Brush(ThemeService.Text, 0.10);
+                resources["ThemePanelControlHover"] = Ui.Brush(ThemeService.Text, 0.18);
                 resources["ThemePanelHover"] = Ui.Brush(ThemeService.Text, 0.12);
                 resources["ThemePanelSelected"] = Ui.Brush(ThemeService.Text, 0.20);
                 resources["ThemePanelText"] = Ui.Brush(ThemeService.Text, 1);
@@ -445,6 +448,27 @@ namespace DesktopBar.UI
                     "M4.2,6.6 L19.8,6.6 " +
                     "M5.6,6.6 L18.4,6.6 L17.65,19.3 Q17.55,20.4 16.45,20.4 L7.55,20.4 Q6.45,20.4 6.35,19.3 Z " +
                     "M10.2,10.3 L10.2,16.7 M13.8,10.3 L13.8,16.7"),
+                Stroke = Ui.Brush(ThemeService.Text, 1),
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Stretch = Stretch.None
+            };
+            _themedShapes.Add(path);
+            canvas.Children.Add(path);
+            return IconViewbox(size, canvas);
+        }
+
+        // 此电脑:显示器(圆角屏幕 + 支柱 + 底座)，与其他顶栏图标同一 24 网格描边风格。
+        protected FrameworkElement MakeThisPcGlyph(double size = 20.5)
+        {
+            var canvas = new Canvas { Width = 24, Height = 24 };
+            var path = new Path
+            {
+                Data = Geometry.Parse(
+                    "M4.4,4.2 L19.6,4.2 Q21.2,4.2 21.2,5.8 L21.2,14 Q21.2,15.6 19.6,15.6 L4.4,15.6 Q2.8,15.6 2.8,14 L2.8,5.8 Q2.8,4.2 4.4,4.2 Z " +
+                    "M12,15.6 L12,18.4 M7.8,19.6 L16.2,19.6"),
                 Stroke = Ui.Brush(ThemeService.Text, 1),
                 StrokeThickness = 1.8,
                 StrokeStartLineCap = PenLineCap.Round,

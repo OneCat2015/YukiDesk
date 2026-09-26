@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using DesktopBar.Services;
 
 namespace DesktopBar.UI
 {
@@ -12,16 +13,20 @@ namespace DesktopBar.UI
 
     /// <summary>
     /// 圆角半透明确认弹窗：始终置顶（呼出即在最上层）、深色毛玻璃质感、支持拖动与回车/Esc。
-    /// 用于顶栏模块的确认场景，替代会被其他窗口压住的系统 MessageBox。
+    /// 用于顶栏模块的确认场景，替代会被其他窗口压住的系统消息框。
     /// </summary>
     public static class ConfirmDialog
     {
         public static bool Show(string title, string message, string confirmText = "确定")
-            => ShowInternal(title, message, confirmText, "取消", true);
+            => ShowInternal(title, message, confirmText, "取消", true, false);
+
+        /// <summary>不可逆或高风险操作确认；默认键盘动作保持在取消侧。</summary>
+        public static bool ShowDanger(string title, string message, string confirmText = "确定")
+            => ShowInternal(title, message, confirmText, "取消", true, true);
 
         /// <summary>单按钮通知弹窗（同样置顶）。</summary>
         public static void Notice(string title, string message)
-            => ShowInternal(title, message, "知道了", null, false);
+            => ShowInternal(title, message, "知道了", null, false, false);
 
         /// <summary>
         /// 同名冲突弹窗：替换（旧项目移入回收站）/ 作为副本（自动编号）/ 取消。
@@ -52,9 +57,10 @@ namespace DesktopBar.UI
                 FontSize = 13,
                 LineHeight = 20,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = Brush("#CFD3E0"),
+                Opacity = 0.78,
                 Margin = new Thickness(0, 10, 0, 0)
             };
+            msg.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
 
             // 自绘勾选框：默认 CheckBox 的系统样式与深色弹窗不搭。
             var checkMark = new TextBlock
@@ -62,22 +68,22 @@ namespace DesktopBar.UI
                 Text = "✓",
                 FontSize = 12,
                 FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
+            checkMark.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
             var box = new Border
             {
                 Width = 17,
                 Height = 17,
                 CornerRadius = new CornerRadius(4),
-                Background = Brush("#FFFFFF", 0.08),
-                BorderBrush = Brush("#FFFFFF", 0.28),
                 BorderThickness = new Thickness(1),
                 VerticalAlignment = VerticalAlignment.Center,
                 Child = checkMark
             };
+            box.SetResourceReference(Border.BackgroundProperty, "ThemePanelHover");
+            box.SetResourceReference(Border.BorderBrushProperty, "ThemePanelText");
             var checkRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -85,42 +91,44 @@ namespace DesktopBar.UI
                 Cursor = Cursors.Hand
             };
             checkRow.Children.Add(box);
-            checkRow.Children.Add(new TextBlock
+            var checkLabel = new TextBlock
             {
                 Text = "为全部文件执行此操作",
                 FontSize = 12,
-                Foreground = Brush("#CFD3E0"),
+                Opacity = 0.78,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(9, 0, 0, 0)
-            });
+            };
+            checkLabel.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
+            checkRow.Children.Add(checkLabel);
             checkRow.MouseLeftButtonUp += (s, e) =>
             {
                 checkedState = !checkedState;
                 checkMark.Visibility = checkedState ? Visibility.Visible : Visibility.Collapsed;
-                box.Background = checkedState ? Brush("#4C7DFF") : Brush("#FFFFFF", 0.08);
+                if (checkedState) box.Background = Brush("#4C7DFF");
+                else box.SetResourceReference(Border.BackgroundProperty, "ThemePanelHover");
             };
 
             var cancel = new Button
             {
                 Content = "取消",
-                Style = (Style)Application.Current.FindResource("Btn"),
+                Style = (Style)Application.Current.FindResource("BtnTheme"),
                 MinWidth = 92,
                 IsCancel = true
             };
             var keepBoth = new Button
             {
                 Content = "作为副本",
-                Style = (Style)Application.Current.FindResource("Btn"),
+                Style = (Style)Application.Current.FindResource("BtnTheme"),
                 MinWidth = 100,
                 Margin = new Thickness(0, 0, 10, 0)
             };
             var replace = new Button
             {
                 Content = "替换",
-                Style = (Style)Application.Current.FindResource("BtnDanger"),
+                Style = (Style)Application.Current.FindResource("BtnThemeDanger"),
                 MinWidth = 92,
-                Margin = new Thickness(0, 0, 10, 0),
-                IsDefault = true
+                Margin = new Thickness(0, 0, 10, 0)
             };
             cancel.Click += (s, e) => { result = null; win.Close(); };
             keepBoth.Click += (s, e) => { result = ConflictChoice.KeepBoth; applyAll = checkedState; win.Close(); };
@@ -137,13 +145,14 @@ namespace DesktopBar.UI
             buttons.Children.Add(replace);
 
             var content = new StackPanel();
-            content.Children.Add(new TextBlock
+            var titleText = new TextBlock
             {
                 Text = title,
                 FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#F2F3F8")
-            });
+                FontWeight = FontWeights.SemiBold
+            };
+            titleText.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
+            content.Children.Add(titleText);
             content.Children.Add(msg);
             content.Children.Add(checkRow);
             content.Children.Add(buttons);
@@ -153,8 +162,6 @@ namespace DesktopBar.UI
                 // 留出阴影空间
                 Margin = new Thickness(18),
                 CornerRadius = new CornerRadius(14),
-                Background = Brush("#15151E", 0.94),
-                BorderBrush = Brush("#FFFFFF", 0.10),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(24, 20, 24, 20),
                 Effect = new DropShadowEffect
@@ -166,6 +173,8 @@ namespace DesktopBar.UI
                 },
                 Child = content
             };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemePanelBackground");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemePanelBorder");
             border.MouseLeftButtonDown += (s, e) =>
             {
                 if (e.ButtonState == MouseButtonState.Pressed)
@@ -184,7 +193,8 @@ namespace DesktopBar.UI
             return result;
         }
 
-        private static bool ShowInternal(string title, string message, string confirmText, string cancelText, bool showCancel)
+        private static bool ShowInternal(string title, string message, string confirmText, string cancelText,
+            bool showCancel, bool danger)
         {
             bool result = false;
             var win = new Window
@@ -205,23 +215,24 @@ namespace DesktopBar.UI
             {
                 Text = title,
                 FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#F2F3F8")
+                FontWeight = FontWeights.SemiBold
             };
+            titleTb.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
             var msg = new TextBlock
             {
                 Text = message,
                 FontSize = 13,
                 LineHeight = 20,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = Brush("#CFD3E0"),
+                Opacity = 0.78,
                 Margin = new Thickness(0, 10, 0, 0)
             };
+            msg.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
 
             var cancel = new Button
             {
                 Content = cancelText,
-                Style = (Style)Application.Current.FindResource("Btn"),
+                Style = (Style)Application.Current.FindResource("BtnTheme"),
                 MinWidth = 92,
                 Margin = new Thickness(0, 0, 10, 0),
                 IsCancel = true,
@@ -230,9 +241,9 @@ namespace DesktopBar.UI
             var ok = new Button
             {
                 Content = confirmText,
-                Style = (Style)Application.Current.FindResource("BtnDanger"),
+                Style = (Style)Application.Current.FindResource(danger ? "BtnThemeDanger" : "BtnTheme"),
                 MinWidth = 92,
-                IsDefault = true
+                IsDefault = !danger
             };
             cancel.Click += (s, e) => { result = false; win.Close(); };
             ok.Click += (s, e) => { result = true; win.Close(); };
@@ -256,8 +267,6 @@ namespace DesktopBar.UI
                 // 留出阴影空间
                 Margin = new Thickness(18),
                 CornerRadius = new CornerRadius(14),
-                Background = Brush("#15151E", 0.94),
-                BorderBrush = Brush("#FFFFFF", 0.10),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(24, 20, 24, 20),
                 Effect = new DropShadowEffect
@@ -269,6 +278,8 @@ namespace DesktopBar.UI
                 },
                 Child = content
             };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemePanelBackground");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemePanelBorder");
             border.MouseLeftButtonDown += (s, e) =>
             {
                 if (e.ButtonState == MouseButtonState.Pressed)
@@ -281,6 +292,11 @@ namespace DesktopBar.UI
             win.KeyDown += (s, e) =>
             {
                 if (e.Key == Key.Escape) { result = false; win.Close(); }
+            };
+            win.Loaded += (s, e) =>
+            {
+                if (showCancel && danger) cancel.Focus();
+                else ok.Focus();
             };
             win.ShowDialog();
             return result;

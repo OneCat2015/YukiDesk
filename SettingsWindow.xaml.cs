@@ -161,34 +161,34 @@ namespace DesktopBar
             bool light = S.SettingsThemeMode == 1
                 || (S.SettingsThemeMode == 0 && SystemUsesLightTheme());
             var resources = Application.Current.Resources;
-            // 跟随系统:浅色模式用干净的白色纸面,深色模式用黑灰底白字(均无蓝紫色调)。
-            resources["SettingsWindowBackground"] = Ui.Brush(light ? "#F5F6F8" : "#0E0E0E");
-            resources["SettingsTitleBackground"] = Ui.Brush(light ? "#FFFFFF" : "#141414");
-            resources["SettingsWindowBorder"] = Ui.Brush(light ? "#DDDFE6" : "#2E2E2E");
+            // 跟随系统:浅色模式用干净的白色纸面,深色模式用灰黑底白字(带一点冷调,避免纯黑发闷)。
+            resources["SettingsWindowBackground"] = Ui.Brush(light ? "#F5F6F8" : "#1A1B21");
+            resources["SettingsTitleBackground"] = Ui.Brush(light ? "#FFFFFF" : "#202129");
+            resources["SettingsWindowBorder"] = Ui.Brush(light ? "#DDDFE6" : "#3A3C46");
             resources["SettingsTextBrush"] = Ui.Brush(light ? "#1A1B22" : "#FFFFFF");
             resources["SettingsSubTextBrush"] = Ui.Brush(light ? "#494E5C" : "#E4E4E4");
             resources["SettingsLabelBrush"] = Ui.Brush(light ? "#101218" : "#FFFFFF");
-            resources["SettingsHoverBackground"] = Ui.Brush(light ? "#EBEDF2" : "#262626");
-            resources["SettingsCardBackground"] = Ui.Brush(light ? "#FFFFFF" : "#161616");
-            resources["SettingsCardBorder"] = Ui.Brush(light ? "#E3E5EC" : "#2C2C2C");
-            resources["SettingsControlBackground"] = Ui.Brush(light ? "#FFFFFF" : "#1E1E1E");
-            resources["SettingsControlBorder"] = Ui.Brush(light ? "#C9CDD8" : "#3A3A3A");
-            resources["SettingsButtonBackground"] = Ui.Brush(light ? "#EDEFF4" : "#232323");
-            resources["SettingsButtonHover"] = Ui.Brush(light ? "#E0E3EB" : "#303030");
-            resources["SettingsButtonPressed"] = Ui.Brush(light ? "#D4D8E2" : "#181818");
+            resources["SettingsHoverBackground"] = Ui.Brush(light ? "#EBEDF2" : "#2F313A");
+            resources["SettingsCardBackground"] = Ui.Brush(light ? "#FFFFFF" : "#23242C");
+            resources["SettingsCardBorder"] = Ui.Brush(light ? "#E3E5EC" : "#393B44");
+            resources["SettingsControlBackground"] = Ui.Brush(light ? "#FFFFFF" : "#2C2D35");
+            resources["SettingsControlBorder"] = Ui.Brush(light ? "#C9CDD8" : "#464850");
+            resources["SettingsButtonBackground"] = Ui.Brush(light ? "#EDEFF4" : "#31323B");
+            resources["SettingsButtonHover"] = Ui.Brush(light ? "#E0E3EB" : "#3C3E47");
+            resources["SettingsButtonPressed"] = Ui.Brush(light ? "#D4D8E2" : "#26272E");
             resources["SettingsAccent"] = Ui.Brush(light ? "#5575E8" : "#6C8CFF");
             resources["SettingsAccentHover"] = Ui.Brush(light ? "#6786F0" : "#7D9BFF");
             resources["SettingsAccentPressed"] = Ui.Brush(light ? "#4564D0" : "#5A78E6");
             resources["SettingsSwitchTrack"] = Ui.Brush(light ? "#6D84D8" : "#465A9D", 0.62);
             resources["SettingsSwitchThumb"] = Ui.Brush(light ? "#FFFFFF" : "#F5F5F5");
-            resources["SettingsSwitchThumbBorder"] = Ui.Brush(light ? "#B9BFCF" : "#555555");
-            resources["SettingsTrack"] = Ui.Brush(light ? "#DBDEE6" : "#2E2E2E");
-            resources["SettingsNavHover"] = Ui.Brush(light ? "#ECEDF2" : "#262626");
+            resources["SettingsSwitchThumbBorder"] = Ui.Brush(light ? "#B9BFCF" : "#5D5F68");
+            resources["SettingsTrack"] = Ui.Brush(light ? "#DBDEE6" : "#3A3C46");
+            resources["SettingsNavHover"] = Ui.Brush(light ? "#ECEDF2" : "#2F313A");
             resources["SettingsNavSelected"] = Ui.Brush(light ? "#5575E8" : "#6C8CFF");
-            resources["SettingsSelected"] = Ui.Brush(light ? "#E2E7F6" : "#303030");
-            resources["SettingsListHover"] = Ui.Brush(light ? "#E8EAF0" : "#3A3A3A");
-            resources["SettingsPopupBackground"] = Ui.Brush(light ? "#FFFFFF" : "#1A1A1A");
-            resources["SettingsScrollThumb"] = Ui.Brush(light ? "#B9BFCC" : "#484848");
+            resources["SettingsSelected"] = Ui.Brush(light ? "#E2E7F6" : "#3C3E47");
+            resources["SettingsListHover"] = Ui.Brush(light ? "#E8EAF0" : "#464850");
+            resources["SettingsPopupBackground"] = Ui.Brush(light ? "#FFFFFF" : "#272830");
+            resources["SettingsScrollThumb"] = Ui.Brush(light ? "#B9BFCC" : "#565861");
             _dropLine?.InvalidateVisual();
             _updatingTheme = false;
         }
@@ -522,10 +522,10 @@ namespace DesktopBar
             btnAdd.Click += (s, e) =>
             {
                 var name = Prompt.Show("新建小文件夹", "文件夹名称:", "新文件夹");
+                if (name == null) return;
                 if (!IsValidFolderName(name))
                 {
-                    MessageBox.Show("请输入单级文件夹名称，不能包含路径分隔符或 ..。", "名称无效",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    ConfirmDialog.Notice("名称无效", "请输入单级文件夹名称，不能包含路径分隔符或 ..。");
                     return;
                 }
                 try
@@ -538,13 +538,13 @@ namespace DesktopBar
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
                 }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "错误"); }
+                catch (Exception ex) { ConfirmDialog.Notice("错误", ex.Message); }
             };
             btnRename.Click += (s, e) =>
             {
                 if (_folderList.SelectedIndex < 0)
                 {
-                    MessageBox.Show("请先在列表中选中一个小文件夹。", "提示");
+                    ConfirmDialog.Notice("提示", "请先在列表中选中一个小文件夹。");
                     return;
                 }
                 int idx = _folderList.SelectedIndex;
@@ -554,8 +554,7 @@ namespace DesktopBar
                 if (string.IsNullOrWhiteSpace(name) || name == old) return;
                 if (!IsValidFolderName(name))
                 {
-                    MessageBox.Show("请输入单级文件夹名称，不能包含路径分隔符或 ..。", "名称无效",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    ConfirmDialog.Notice("名称无效", "请输入单级文件夹名称，不能包含路径分隔符或 ..。");
                     return;
                 }
                 try
@@ -565,17 +564,17 @@ namespace DesktopBar
                     if (oldDir == null || newDir == null) return;
                     if (!Directory.Exists(oldDir))
                     {
-                        MessageBox.Show("原文件夹不存在，未修改配置。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        ConfirmDialog.Notice("重命名失败", "原文件夹不存在，未修改配置。");
                         return;
                     }
                     if (Directory.Exists(newDir))
                     {
-                        MessageBox.Show("目标文件夹已存在。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        ConfirmDialog.Notice("重命名失败", "目标文件夹已存在。");
                         return;
                     }
                     if (S.Folders.Where((folder, index) => index != idx).Contains(name, StringComparer.OrdinalIgnoreCase))
                     {
-                        MessageBox.Show("同名小文件夹已存在。", "重命名失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        ConfirmDialog.Notice("重命名失败", "同名小文件夹已存在。");
                         return;
                     }
                     Directory.Move(oldDir, newDir);
@@ -584,34 +583,41 @@ namespace DesktopBar
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
                 }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "错误"); }
+                catch (Exception ex) { ConfirmDialog.Notice("错误", ex.Message); }
             };
-            btnRemove.Click += (s, e) =>
+            btnRemove.Click += async (s, e) =>
             {
                 if (_folderList.SelectedIndex < 0) return;
                 int idx = _folderList.SelectedIndex;
                 if (idx >= S.Folders.Count) return;
                 string sel = S.Folders[idx];
-                var r = MessageBox.Show(
-                    "删除小文件夹“" + sel + "”?\n\n文件夹及其中的所有文件将移入回收站(可在回收站还原),顶栏选项卡同步移除。",
-                    "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (r != MessageBoxResult.Yes) return;
+                if (!ConfirmDialog.ShowDanger("确认删除", "删除小文件夹“" + sel + "”？\n\n文件夹及其中的所有文件将移入回收站(可在回收站还原),顶栏选项卡同步移除。", "删除")) return;
                 try
                 {
                     string dir = GetFolderPath(sel);
                     if (dir == null)
                     {
-                        MessageBox.Show("该配置中的文件夹名称无效，已阻止删除。", "错误",
-                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        ConfirmDialog.Notice("错误", "该配置中的文件夹名称无效，已阻止删除。");
                         return;
                     }
                     if (Directory.Exists(dir))
                     {
                         // 目录内容连同文件夹一起移入回收站(带撤销信息);直接删除不可恢复,不用。
-                        if (!NativeMethods.DeleteToRecycleBin(new[] { dir }))
+                        bool success = false;
+                        var result = await OperationProgressDialog.RunDetailedAsync("正在移入回收站", true, 1,
+                            progress => System.Threading.Tasks.Task.Run(() =>
+                            {
+                                success = NativeMethods.DeleteToRecycleBin(new[] { dir });
+                                progress.Report(1, success ? sel : "操作失败", success);
+                            }));
+                        if (!result.Started)
                         {
-                            MessageBox.Show("删除文件夹失败(可能被其他程序占用)。", "错误",
-                                MessageBoxButton.OK, MessageBoxImage.Error);
+                            ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                            return;
+                        }
+                        if (!success)
+                        {
+                            ConfirmDialog.Notice("错误", "删除文件夹失败(可能被其他程序占用)。");
                             return;
                         }
                     }
@@ -620,7 +626,7 @@ namespace DesktopBar
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
                 }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "错误"); }
+                catch (Exception ex) { ConfirmDialog.Notice("错误", ex.Message); }
             };
 
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };

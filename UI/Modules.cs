@@ -51,25 +51,56 @@ namespace DesktopBar.UI
         {
             var body = new StackPanel { Width = 190 * Ui.Scale };
             body.Children.Add(MakePanelTitle("电源"));
-            AddPowerButton(body, "关机", "将关闭 Windows", NativeMethods.Shutdown, true);
-            AddPowerButton(body, "重启", "重新启动 Windows", NativeMethods.Restart, true);
-            AddPowerButton(body, "睡眠", "进入睡眠模式", NativeMethods.Sleep, true);
-            AddPowerButton(body, "锁定", "锁定当前会话", NativeMethods.Lock, false);
-            AddPowerButton(body, "息屏", "关闭显示器，移动鼠标可唤醒", NativeMethods.DisplayOff, false);
+            AddPowerButton(body, "关机", "将关闭 Windows", NativeMethods.Shutdown, true, true);
+            AddPowerButton(body, "重启", "重新启动 Windows", NativeMethods.Restart, true, true);
+            AddPowerButton(body, "睡眠", "进入睡眠模式", NativeMethods.Sleep, true, false);
+            AddPowerButton(body, "锁定", "锁定当前会话", NativeMethods.Lock, false, false);
+            AddPowerButton(body, "息屏", "关闭显示器，移动鼠标可唤醒", NativeMethods.DisplayOff, false, false);
             Panel.Child = body;
         }
 
-        private void AddPowerButton(StackPanel body, string title, string sub, Action action, bool confirm)
+        private void AddPowerButton(StackPanel body, string title, string sub, Func<bool> action,
+            bool confirm, bool danger)
         {
-            var b = new Button { Content = title, Style = (Style)Application.Current.FindResource("Btn"), HorizontalContentAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
+            // 半透明玻璃底（同右键菜单行），不再是实心黑色。
+            var b = new Button { Content = title, Style = (Style)Application.Current.FindResource("BtnGlass"), HorizontalContentAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
             b.ToolTip = sub;
             b.Click += (s, e) =>
             {
-                if (!confirm || ConfirmDialog.Show(title, "确定要" + title + "吗？", title))
-                    action();
+                bool allowed = !confirm || (danger
+                    ? ConfirmDialog.ShowDanger(title, "确定要" + title + "吗？", title)
+                    : ConfirmDialog.Show(title, "确定要" + title + "吗？", title));
+                if (!allowed) return;
+                if (!action()) ConfirmDialog.Notice(title + "失败", title + "操作未能完成。");
             };
             body.Children.Add(b);
         }
+    }
+
+    // 此电脑:单击打开资源管理器"此电脑"页,右键菜单提供"属性"(跳转系统设置的"关于"页)。
+    public class ThisPcModule : ModuleBase
+    {
+        private const string ThisPcShellPath = "shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+        private const string AboutSettingsUri = "ms-settings:about";
+
+        public ThisPcModule(TabStyle st) : base(st)
+        {
+            Pill.Width = 38 * Ui.Scale;
+            Pill.Padding = new Thickness(0);
+            Pill.ToolTip = "此电脑 — 单击打开，右键更多";
+            Pill.Child = CenterIcon(MakeThisPcGlyph(20.5));
+            Pill.MouseLeftButtonUp += (s, e) => NativeMethods.ShellExecuteOpen(ThisPcShellPath);
+            Pill.MouseRightButtonUp += (s, e) =>
+            {
+                TrackFlyout(FlyoutMenu.Show(new List<FlyoutItem>
+                {
+                    new FlyoutItem("属性", () => NativeMethods.ShellExecuteOpen(AboutSettingsUri))
+                }));
+                e.Handled = true;
+            };
+        }
+        protected override bool HoverOpensPanel => false;
+        protected override bool HasPanel => false;
     }
 
     public class ClockModule : ModuleBase
@@ -109,12 +140,7 @@ namespace DesktopBar.UI
     {
         private readonly Image _smallImg, _bigImg;
         private readonly MarqueeText _pillMarquee, _panelMarquee;
-        private readonly TextBlock _tArtist, _tCur, _tTotal, _playGlyph, _placeholderGlyph;
-        private readonly ProgressBar _progress;
-        private readonly Border _progressHost;
-        private readonly Grid _timeRow;
-        private readonly Ellipse _seekThumb;
-        private Action<TimeSpan> _seek;
+        private readonly TextBlock _tArtist, _playGlyph, _placeholderGlyph;
         private string _mediaKey = "";
         private long _lastMediaGeneration;
         private string _lastTitle = "暂无音乐";
@@ -135,23 +161,24 @@ namespace DesktopBar.UI
             var pillSp = new StackPanel { Orientation = Orientation.Horizontal }; pillSp.Children.Add(coverBorder); pillSp.Children.Add(_pillMarquee); Pill.Child = pillSp;
 
             _bigImg = new Image { Width = 96 * Ui.Scale, Height = 96 * Ui.Scale, Stretch = Stretch.UniformToFill };
-            var bigCover = new Border { Width = 96 * Ui.Scale, Height = 96 * Ui.Scale, CornerRadius = new CornerRadius(14 * Ui.Scale), Child = _bigImg, HorizontalAlignment = HorizontalAlignment.Center, Background = Ui.Brush(ThemeService.Text, 0.06) }; bigCover.Clip = new RectangleGeometry(new Rect(0, 0, 96 * Ui.Scale, 96 * Ui.Scale), 14 * Ui.Scale, 14 * Ui.Scale);
+            var bigCover = new Border
+            {
+                Width = 96 * Ui.Scale,
+                Height = 96 * Ui.Scale,
+                CornerRadius = new CornerRadius(14 * Ui.Scale),
+                Child = _bigImg,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            bigCover.SetResourceReference(Border.BackgroundProperty, "ThemePanelSubtle");
+            bigCover.Clip = new RectangleGeometry(new Rect(0, 0, 96 * Ui.Scale, 96 * Ui.Scale), 14 * Ui.Scale, 14 * Ui.Scale);
             // 展开页歌名同样滚动；超宽前保持居中。宽度 = 面板 300 - 内边距 24 - 标题左右边距 8。
             _panelMarquee = new MarqueeText(MakeText("暂无音乐", 2), 268 * Ui.Scale, 24 * Ui.Scale, hug: false);
             _pillMarquee.SetText("暂无音乐");
             _panelMarquee.SetText("暂无音乐");
-            _tArtist = MakeText(""); _tArtist.TextAlignment = TextAlignment.Center; _tCur = MakeText("0:00"); _tTotal = MakeText("0:00");
-
-            _progress = new ProgressBar { Minimum = 0, Maximum = 1, Height = 6 * Ui.Scale, Style = null, Foreground = Ui.Brush("#6C8CFF"), Background = Ui.Brush(ThemeService.Text, 0.15), VerticalAlignment = VerticalAlignment.Center };
-            _seekThumb = new Ellipse { Width = 14 * Ui.Scale, Height = 14 * Ui.Scale, Fill = Ui.Brush("#FFFFFF"), Stroke = Ui.Brush("#6C8CFF"), StrokeThickness = 2 * Ui.Scale, Visibility = Visibility.Collapsed };
-            var trackGrid = new Grid(); trackGrid.Children.Add(_progress); trackGrid.Children.Add(_seekThumb);
-            _progressHost = new Border { Height = 16 * Ui.Scale, Margin = new Thickness(8 * Ui.Scale, 0, 8 * Ui.Scale, 0), Child = trackGrid, CornerRadius = new CornerRadius(3 * Ui.Scale), Clip = new RectangleGeometry(new Rect(0, 0, 1000, 16 * Ui.Scale), 3 * Ui.Scale, 3 * Ui.Scale) };
-            _progressHost.MouseLeftButtonUp += (s, e) => { if (_seek == null || _progress.Maximum <= 1) return; var pt = e.GetPosition(_progressHost); _seek(TimeSpan.FromSeconds(Math.Max(0, Math.Min(_progress.Maximum, pt.X / Math.Max(1, _progressHost.ActualWidth) * _progress.Maximum)))); };
-            _timeRow = new Grid { Margin = new Thickness(0, 14 * Ui.Scale, 0, 0) }; _timeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); _timeRow.ColumnDefinitions.Add(new ColumnDefinition()); _timeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); Grid.SetColumn(_tCur, 0); Grid.SetColumn(_progressHost, 1); Grid.SetColumn(_tTotal, 2); _timeRow.Children.Add(_tCur); _timeRow.Children.Add(_progressHost); _timeRow.Children.Add(_tTotal);
+            _tArtist = MakeText(""); _tArtist.TextAlignment = TextAlignment.Center;
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 14 * Ui.Scale, 0, 0) }; btnRow.Children.Add(ShellButton(Glyph("⏮", 19), () => NativeMethods.SendMediaKey(NativeMethods.VK_MEDIA_PREV))); _playGlyph = Glyph("▶", 19); btnRow.Children.Add(ShellButton(_playGlyph, () => NativeMethods.SendMediaKey(NativeMethods.VK_MEDIA_PLAY_PAUSE))); btnRow.Children.Add(ShellButton(Glyph("⏭", 19), () => NativeMethods.SendMediaKey(NativeMethods.VK_MEDIA_NEXT)));
-            var body = new StackPanel { Width = 300 * Ui.Scale }; body.Children.Add(bigCover); _panelMarquee.Margin = new Thickness(4 * Ui.Scale, 12 * Ui.Scale, 4 * Ui.Scale, 0); body.Children.Add(_panelMarquee); _tArtist.Margin = new Thickness(4 * Ui.Scale, 4 * Ui.Scale, 4 * Ui.Scale, 0); body.Children.Add(_tArtist); body.Children.Add(_timeRow); body.Children.Add(btnRow); Panel.Child = body;
+            var body = new StackPanel { Width = 300 * Ui.Scale }; body.Children.Add(bigCover); _panelMarquee.Margin = new Thickness(4 * Ui.Scale, 12 * Ui.Scale, 4 * Ui.Scale, 0); body.Children.Add(_panelMarquee); _tArtist.Margin = new Thickness(4 * Ui.Scale, 4 * Ui.Scale, 4 * Ui.Scale, 0); body.Children.Add(_tArtist); body.Children.Add(btnRow); Panel.Child = body;
         }
-        public void SetSeek(Action<TimeSpan> seek) { _seek = seek; }
 
         public void Update(MediaInfo info)
         {
@@ -177,10 +204,8 @@ namespace DesktopBar.UI
             _tArtist.Text = info.Artist ?? "";
             _smallImg.Source = info.Cover;
             _bigImg.Source = info.Cover;
-            _progress.Maximum = Math.Max(1, info.Duration.TotalSeconds); _progress.Value = Math.Min(Math.Max(0, info.Position.TotalSeconds), _progress.Maximum); bool hasTimeline = info.Duration > TimeSpan.Zero; bool canSeek = hasTimeline && info.SeekSupported; _timeRow.Visibility = hasTimeline ? Visibility.Visible : Visibility.Collapsed; _progressHost.Visibility = canSeek ? Visibility.Visible : Visibility.Collapsed; _seekThumb.Visibility = canSeek ? Visibility.Visible : Visibility.Collapsed;
-            _tCur.Text = Fmt(info.Position); _tTotal.Text = Fmt(info.Duration); _playGlyph.Text = info.Playing ? "⏸" : "▶"; NudgeGlyph(_playGlyph, info.Playing ? "⏸" : "▶");
+            _playGlyph.Text = info.Playing ? "⏸" : "▶"; NudgeGlyph(_playGlyph, info.Playing ? "⏸" : "▶");
         }
-        private static string Fmt(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
         // Segoe UI Symbol 媒体符号的行盒下留白偏大，墨迹在圆形按键里整体偏下；
         // 按实测（48px 按钮内 19px 字形）逐字形向上做光学补偿。
         private static readonly Dictionary<string, double> GlyphNudge = new Dictionary<string, double>
@@ -207,7 +232,25 @@ namespace DesktopBar.UI
             else
                 t.RenderTransform = null;
         }
-        private Border ShellButton(FrameworkElement content, Action click) { var b = new Border { Width = 48 * Ui.Scale, Height = 48 * Ui.Scale, CornerRadius = new CornerRadius(24 * Ui.Scale), Background = Ui.Brush(ThemeService.Text, 0.08), Cursor = Cursors.Hand, Child = content, Margin = new Thickness(5 * Ui.Scale, 0, 5 * Ui.Scale, 0), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }; b.MouseEnter += (s, e) => b.Background = Ui.Brush(ThemeService.Text, 0.18); b.MouseLeave += (s, e) => b.Background = Ui.Brush(ThemeService.Text, 0.08); b.MouseLeftButtonUp += (s, e) => click(); return b; }
+        private Border ShellButton(FrameworkElement content, Action click)
+        {
+            var b = new Border
+            {
+                Width = 48 * Ui.Scale,
+                Height = 48 * Ui.Scale,
+                CornerRadius = new CornerRadius(24 * Ui.Scale),
+                Cursor = Cursors.Hand,
+                Child = content,
+                Margin = new Thickness(5 * Ui.Scale, 0, 5 * Ui.Scale, 0),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            b.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
+            b.MouseEnter += (s, e) => b.SetResourceReference(Border.BackgroundProperty, "ThemePanelControlHover");
+            b.MouseLeave += (s, e) => b.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
+            b.MouseLeftButtonUp += (s, e) => click();
+            return b;
+        }
     }
 
     public class VolumeModule : ModuleBase
@@ -216,19 +259,13 @@ namespace DesktopBar.UI
         private readonly FrameworkElement _summary;
         private readonly System.Windows.Shapes.Path _speakerWave1, _speakerWave2;
         private readonly TextBlock _value;
-        private readonly TextBlock _deviceCaption;
         private readonly Slider _slider;
-        private readonly ComboBox _devices;
         private DispatcherTimer _poll;
         private bool _syncing;
-        private bool _syncingDevices;
         private bool _muted;
         private bool _volumeAvailable;
         private bool _volumeWritesEnabled;
         private bool _disposed;
-        private bool _deviceRefreshInFlight;
-        private int _deviceRefreshVersion;
-        private string _deviceListSignature = "";
         public VolumeModule(TabStyle st) : base(st)
         {
             Pill.Width = 38 * Ui.Scale;
@@ -245,20 +282,6 @@ namespace DesktopBar.UI
             float initialVolume = initialVolumeRead ?? 0;
             _muted = _volume.GetMute() ?? false;
             _syncing = false;
-            _devices = new ComboBox
-            {
-                Width = 230 * Ui.Scale,
-                Height = 34 * Ui.Scale,
-                Style = (Style)Application.Current.FindResource("DarkCombo"),
-                Margin = new Thickness(0, 2 * Ui.Scale, 0, 4 * Ui.Scale)
-            };
-            _deviceCaption = new TextBlock
-            {
-                Foreground = Ui.Brush(ThemeService.Text, 0.65),
-                FontSize = 11 * Ui.Scale,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(4 * Ui.Scale, 8 * Ui.Scale, 4 * Ui.Scale, 0)
-            };
             var body = new StackPanel { Width = 230 * Ui.Scale };
             body.Children.Add(MakePanelTitle("音量"));
             body.Children.Add(_slider = new Slider
@@ -268,22 +291,11 @@ namespace DesktopBar.UI
                 Value = initialVolume,
                 Style = (Style)Application.Current.FindResource("SliderDark")
             });
+            _slider.SetResourceReference(Control.BackgroundProperty, "ThemePanelControl");
             body.Children.Add(_value = MakeText(initialVolumeAvailable ? Math.Round(initialVolume * 100) + "%" : "读取失败"));
             _slider.IsEnabled = initialVolumeAvailable;
             _value.HorizontalAlignment = HorizontalAlignment.Center;
-            body.Children.Add(_deviceCaption);
-            body.Children.Add(_devices);
             Panel.Child = body;
-            RefreshDevicesAsync();
-            _devices.SelectionChanged += (s, e) =>
-            {
-                if (_syncingDevices || !(_devices.SelectedItem is AudioDeviceInfo d)) return;
-                if (_volume.SelectDevice(d.Id, d.Name))
-                {
-                    _deviceCaption.Text = _volume.DeviceName;
-                    SyncFromDevice();
-                }
-            };
             _slider.ValueChanged += (s, e) =>
             {
                 _value.Text = Math.Round(e.NewValue * 100) + "%";
@@ -330,55 +342,12 @@ namespace DesktopBar.UI
 
         protected override void OnPanelShown()
         {
-            RefreshDevicesAsync();
+            _volume.SyncDefaultIfChanged();
             SyncFromDevice();
             _poll.Start();
         }
 
         protected override void OnPanelHidden() => _poll.Stop();
-
-        private async void RefreshDevicesAsync()
-        {
-            if (_devices == null || _deviceRefreshInFlight) return;
-            _deviceRefreshInFlight = true;
-            int version = ++_deviceRefreshVersion;
-            try
-            {
-                var list = await _volume.RefreshDevicesAsync();
-                if (_disposed || version != _deviceRefreshVersion) return;
-
-                string signature = string.Join("\n", list.Select(x => x.Id + "|" + x.Name + "|" + x.IsDefault));
-                bool changed = !string.Equals(signature, _deviceListSignature, StringComparison.Ordinal);
-                var selected = list.Find(x => string.Equals(x.Id, _volume.CurrentDeviceId, StringComparison.OrdinalIgnoreCase))
-                               ?? list.Find(x => x.IsDefault)
-                               ?? list.FirstOrDefault();
-                if (changed)
-                {
-                    _syncingDevices = true;
-                    _devices.ItemsSource = list;
-                    if (selected != null) _devices.SelectedItem = selected;
-                    _deviceListSignature = signature;
-                    _syncingDevices = false;
-                }
-                else if (selected != null && !ReferenceEquals(_devices.SelectedItem, selected)
-                         && !string.Equals((_devices.SelectedItem as AudioDeviceInfo)?.Id, selected.Id, StringComparison.OrdinalIgnoreCase))
-                {
-                    _syncingDevices = true;
-                    _devices.SelectedItem = selected;
-                    _syncingDevices = false;
-                }
-                _deviceCaption.Text = _volume.DeviceName;
-            }
-            catch (Exception ex)
-            {
-                App.Log("刷新播放设备列表失败: " + ex.Message);
-            }
-            finally
-            {
-                if (version == _deviceRefreshVersion)
-                    _deviceRefreshInFlight = false;
-            }
-        }
 
         private void SyncControls(float value)
         {
@@ -417,7 +386,6 @@ namespace DesktopBar.UI
         {
             if (_disposed) return;
             _disposed = true;
-            _deviceRefreshVersion++;
             _poll.Stop();
             _volume.Dispose();
             base.Dispose();
@@ -430,6 +398,13 @@ namespace DesktopBar.UI
         private bool _disposed;
         private bool _filesDirty = true;
         private int _fileLoadVersion;
+
+        private sealed class MoveRequest
+        {
+            public string Source;
+            public string ReplaceTarget;
+            public bool CopyInstead;
+        }
         private readonly List<DispatcherTimer> _itemOpenTimers = new List<DispatcherTimer>();
         private string Dir
         {
@@ -505,12 +480,38 @@ namespace DesktopBar.UI
         }
         private void ShowBlankMenu()
         {
-            // 剪贴板没有文件时“粘贴”置灰不可点。
+            // 剪贴板没有文件时“粘贴”置灰不可点；实际路径在点击时捕获，避免菜单打开后剪贴板变化。
             bool has = FileClipboard.HasPasteableFiles && !string.IsNullOrEmpty(Dir);
             TrackFlyout(FlyoutMenu.Show(new List<FlyoutItem>
             {
-                new FlyoutItem("粘贴", () => { if (!string.IsNullOrEmpty(Dir)) FileClipboard.PasteInto(Dir); }, enabled: has)
+                new FlyoutItem("粘贴", PasteIntoFolder, enabled: has)
             }));
+        }
+
+        private async void PasteIntoFolder()
+        {
+            string directory = Dir;
+            var snapshot = FileClipboard.CapturePasteSnapshot();
+            if (snapshot == null || string.IsNullOrEmpty(directory)) return;
+            FileClipboard.PasteResult paste = null;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在粘贴文件", false, snapshot.Paths.Count,
+                progress => Task.Run(() =>
+                {
+                    paste = FileClipboard.PasteSnapshotDetailed(snapshot, directory,
+                        (completed, name, placed) => progress.Report(completed, name, placed));
+                }));
+            if (!_disposed) LoadFiles();
+            if (!result.Started) return;
+            int succeeded = paste?.Succeeded ?? result.Succeeded;
+            int total = paste?.Total ?? snapshot.Paths.Count;
+            if (succeeded < total)
+            {
+                var failed = paste?.FailedItems ?? Array.Empty<string>();
+                ConfirmDialog.Notice("粘贴未全部完成",
+                    "已完成 " + succeeded + "/" + total + " 项。"
+                    + (failed.Count == 0 ? "" : "\n\n" + string.Join("\n", failed.Take(5))
+                        + (failed.Count > 5 ? "\n……" : "")));
+            }
         }
 
         protected override void OnPanelShown()
@@ -607,11 +608,12 @@ namespace DesktopBar.UI
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Center,
                 FontSize = 11 * scale,
-                Foreground = Ui.Brush(ThemeService.Text, 0.9),
+                Opacity = 0.9,
                 MaxHeight = 28 * scale,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 4 * scale, 0, 0)
             };
+            name.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
             var sp = new StackPanel
             {
                 Width = 68 * scale,
@@ -648,7 +650,7 @@ namespace DesktopBar.UI
                         EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.08 }
                     });
             }
-            border.MouseEnter += (s, e) => border.Background = Ui.Brush(ThemeService.Text, 0.10);
+            border.MouseEnter += (s, e) => border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
             border.MouseLeave += (s, e) =>
             {
                 border.Background = Brushes.Transparent;
@@ -661,7 +663,7 @@ namespace DesktopBar.UI
                 transform.BeginAnimation(ScaleTransform.ScaleYProperty, null);
                 transform.ScaleX = 0.93;
                 transform.ScaleY = 0.93;
-                border.Background = Ui.Brush(ThemeService.Text, 0.18);
+                border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControlHover");
             };
             border.PreviewMouseMove += (s, e) =>
             {
@@ -696,7 +698,7 @@ namespace DesktopBar.UI
             border.MouseLeftButtonUp += (s, e) =>
             {
                 AnimateBack();
-                border.Background = Ui.Brush(ThemeService.Text, 0.10);
+                border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
                 if (suppressClickAfterDrag)
                 {
                     suppressClickAfterDrag = false;
@@ -764,10 +766,23 @@ namespace DesktopBar.UI
             }
             catch (Exception ex) { ConfirmDialog.Notice("重命名失败", ex.Message); }
         }
-        private void DeleteItem(FileSystemInfo f)
+        private async void DeleteItem(FileSystemInfo f)
         {
-            if (!ConfirmDialog.Show("删除", "确定要把“" + f.Name + "”移到回收站吗？", "删除")) return;
-            if (NativeMethods.DeleteToRecycleBin(new[] { f.FullName })) LoadFiles();
+            if (!ConfirmDialog.ShowDanger("删除", "确定要把“" + f.Name + "”移到回收站吗？", "删除")) return;
+            bool success = false;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在移入回收站", true, 1,
+                progress => Task.Run(() =>
+                {
+                    success = NativeMethods.DeleteToRecycleBin(new[] { f.FullName });
+                    progress.Report(1, f.Name, success);
+                }));
+            if (_disposed) return;
+            if (!result.Started)
+            {
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
+            if (success) LoadFiles();
             else ConfirmDialog.Notice("删除失败", "无法把“" + f.Name + "”移到回收站。");
         }
         private void EnableDragDrop()
@@ -778,32 +793,49 @@ namespace DesktopBar.UI
             {
                 el.DragOver += (s, e) =>
                 {
-                    if (!e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.None;
-                    else e.Effects = (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.Copy;
+                    // 小文件夹拖入固定为移动语义；来源不允许 Move 时拒绝，不能显示 Copy 却实际移走源文件。
+                    e.Effects = !OperationProgressDialog.Busy
+                        && e.Data.GetDataPresent(DataFormats.FileDrop)
+                        && (e.AllowedEffects & DragDropEffects.Move) != 0
+                        ? DragDropEffects.Move
+                        : DragDropEffects.None;
                     e.Handled = true;
                 };
                 el.Drop += (s, e) =>
                 {
-                    if (e.Data.GetDataPresent(DataFormats.FileDrop))
-                        MoveInto((string[])e.Data.GetData(DataFormats.FileDrop));
+                    bool canMove = (e.AllowedEffects & DragDropEffects.Move) != 0;
+                    if (e.Data.GetDataPresent(DataFormats.FileDrop)
+                        && !OperationProgressDialog.Busy && canMove)
+                    {
+                        bool sourcesPreserved;
+                        bool success = MoveInto((string[])e.Data.GetData(DataFormats.FileDrop), out sourcesPreserved);
+                        e.Effects = success && !sourcesPreserved
+                            ? DragDropEffects.Move
+                            : DragDropEffects.None;
+                    }
+                    else e.Effects = DragDropEffects.None;
                     e.Handled = true;
                 };
             }
         }
-        // 拖入采用移动语义：源文件从原位置移走；与目标重名时弹窗选择替换或保留为副本。
-        private void MoveInto(string[] files)
+        // 拖入默认采用移动语义；同名冲突选择“作为副本”时保留源项目。
+        private bool MoveInto(string[] files, out bool sourcesPreserved)
         {
-            if (string.IsNullOrEmpty(Dir)) return;
+            sourcesPreserved = false;
+            string destination = Dir;
+            if (string.IsNullOrEmpty(destination)) return false;
             try
             {
-                Directory.CreateDirectory(Dir);
-                string destRoot = FilePath.GetFullPath(Dir).TrimEnd('\\', '/');
+                Directory.CreateDirectory(destination);
+                string destRoot = FilePath.GetFullPath(destination).TrimEnd('\\', '/');
+                var requests = new List<MoveRequest>();
                 ConflictChoice? choice = null;
                 bool applyToAll = false;
                 foreach (var f in files ?? Array.Empty<string>())
                 {
                     if (string.IsNullOrEmpty(f)) continue;
                     string full = FilePath.GetFullPath(f).TrimEnd('\\', '/');
+                    if (!File.Exists(full) && !Directory.Exists(full)) continue;
                     // 跳过：源就是本目录、或把文件夹拖进它自己的子目录。
                     if (string.Equals(full, destRoot, StringComparison.OrdinalIgnoreCase)) continue;
                     if (destRoot.StartsWith(full + "\\", StringComparison.OrdinalIgnoreCase)) continue;
@@ -811,6 +843,8 @@ namespace DesktopBar.UI
                     if (string.Equals(parent?.TrimEnd('\\', '/'), destRoot, StringComparison.OrdinalIgnoreCase)) continue;
 
                     string dest = FilePath.Combine(destRoot, FilePath.GetFileName(full));
+                    string replaceTarget = null;
+                    bool copyInstead = false;
                     if (File.Exists(dest) || Directory.Exists(dest))
                     {
                         if (!applyToAll)
@@ -818,23 +852,61 @@ namespace DesktopBar.UI
                             choice = ConfirmDialog.ShowConflict("存在同名项目",
                                 "“" + FilePath.GetFileName(dest) + "”已在此文件夹中。要替换它，还是把拖入的项保留为副本？",
                                 out applyToAll);
-                            if (choice == null) break; // 取消：中止剩余项
+                            if (choice == null) break;
                         }
-                        if (choice == ConflictChoice.Replace)
-                        {
-                            // 旧项目先移入回收站（可撤销），腾出原名后按原名移动；失败则跳过该项避免误留副本。
-                            if (!NativeMethods.DeleteToRecycleBin(new[] { dest }))
-                            {
-                                App.Log("替换失败，旧项目无法移入回收站: " + dest);
-                                continue;
-                            }
-                        }
+                        if (choice == ConflictChoice.Replace) replaceTarget = dest;
+                        else if (choice == ConflictChoice.KeepBoth) copyInstead = true;
                     }
-                    FileClipboard.TryPlace(f, Dir, move: true);
+                    requests.Add(new MoveRequest
+                    {
+                        Source = full,
+                        ReplaceTarget = replaceTarget,
+                        CopyInstead = copyInstead
+                    });
                 }
-                LoadFiles();
+
+                if (requests.Count == 0) return false;
+                sourcesPreserved = requests.Any(request => request.CopyInstead);
+                var failures = new List<string>();
+                var result = OperationProgressDialog.RunWithDispatcherPumpDetailed("正在移动文件", false, requests.Count,
+                    progress =>
+                    {
+                        for (int i = 0; i < requests.Count; i++)
+                        {
+                            var request = requests[i];
+                            bool placed;
+                            string error = null;
+                            if (!string.IsNullOrEmpty(request.ReplaceTarget))
+                            {
+                                placed = FileClipboard.TryReplace(request.Source, request.ReplaceTarget,
+                                    () => NativeMethods.DeleteToRecycleBin(new[] { request.ReplaceTarget }),
+                                    out error);
+                            }
+                            else
+                            {
+                                placed = FileClipboard.TryPlace(request.Source, destination, move: !request.CopyInstead);
+                                if (!placed) error = request.CopyInstead ? "复制失败。" : "移动或跨卷复制失败。";
+                            }
+                            string name = FilePath.GetFileName(request.Source);
+                            if (!placed)
+                            {
+                                failures.Add(name + (string.IsNullOrEmpty(error) ? "" : "：" + error));
+                                App.Log("拖入操作失败: " + name + (string.IsNullOrEmpty(error) ? "" : " — " + error));
+                            }
+                            progress.Report(i + 1, name, placed);
+                        }
+                        return Task.CompletedTask;
+                    });
+                if (!_disposed) LoadFiles();
+                if (result.SucceededFully) return true;
+                if (result.Started && failures.Count > 0)
+                    ConfirmDialog.Notice("移动未全部完成",
+                        "已完成 " + result.Succeeded + "/" + requests.Count + " 项。\n\n"
+                        + string.Join("\n", failures.Take(5))
+                        + (failures.Count > 5 ? "\n……" : ""));
+                return false;
             }
-            catch (Exception ex) { App.Log("拖入失败: " + ex.Message); }
+            catch (Exception ex) { App.Log("拖入失败: " + ex.Message); return false; }
         }
         public override void Dispose()
         {
@@ -914,18 +986,38 @@ namespace DesktopBar.UI
             {
                 el.DragOver += (s, e) =>
                 {
-                    e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Move : DragDropEffects.None;
+                    e.Effects = !OperationProgressDialog.Busy && e.Data.GetDataPresent(DataFormats.FileDrop)
+                        ? DragDropEffects.Move : DragDropEffects.None;
                     e.Handled = true;
                 };
                 el.Drop += (s, e) =>
                 {
-                    if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                    bool moved = false;
+                    if (e.Data.GetDataPresent(DataFormats.FileDrop) && !OperationProgressDialog.Busy)
                     {
                         var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                        if (files != null && files.Length > 0 && NativeMethods.DeleteToRecycleBin(files))
-                            App.Log("已把 " + files.Length + " 项移入回收站");
-                        LoadItems();
+                        if (files != null && files.Length > 0)
+                        {
+                            bool success = false;
+                            var result = OperationProgressDialog.RunWithDispatcherPumpDetailed("正在移入回收站", true, files.Length,
+                                progress =>
+                                {
+                                    success = NativeMethods.DeleteToRecycleBin(files);
+                                    progress.Report(files.Length, success ? "已完成" : "操作失败", success);
+                                    if (success) App.Log("已把 " + files.Length + " 项移入回收站");
+                                    return Task.CompletedTask;
+                                });
+                            moved = result.SucceededFully && success;
+                            if (result.Started)
+                            {
+                                LoadItems();
+                                if (!moved)
+                                    ConfirmDialog.Notice("移入回收站失败", "无法把拖入的项目全部移入回收站。");
+                            }
+                        }
                     }
+                    e.Effects = moved ? DragDropEffects.Move : DragDropEffects.None;
+                    e.Handled = true;
                 };
             }
         }
@@ -985,11 +1077,12 @@ namespace DesktopBar.UI
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Center,
                 FontSize = 11 * scale,
-                Foreground = Ui.Brush(ThemeService.Text, 0.9),
+                Opacity = 0.9,
                 MaxHeight = 28 * scale,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 4 * scale, 0, 0)
             };
+            name.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
             var sp = new StackPanel { Width = 68 * scale, Margin = new Thickness(3 * scale, 8 * scale, 3 * scale, 8 * scale) };
             sp.Children.Add(img);
             sp.Children.Add(name);
@@ -1007,7 +1100,7 @@ namespace DesktopBar.UI
             // 拖出 = 把内容移出回收站：落点接受 Move 后删除 $R 内容与 $I 元数据。
             Point? dragStart = null;
             bool dragTaken = false;
-            border.MouseEnter += (s, e) => border.Background = Ui.Brush(ThemeService.Text, 0.10);
+            border.MouseEnter += (s, e) => border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
             border.MouseLeave += (s, e) => { border.Background = Brushes.Transparent; AnimateItemBack(transform); };
             border.PreviewMouseLeftButtonDown += (s, e) =>
             {
@@ -1016,7 +1109,7 @@ namespace DesktopBar.UI
                 transform.BeginAnimation(ScaleTransform.ScaleYProperty, null);
                 transform.ScaleX = 0.93;
                 transform.ScaleY = 0.93;
-                border.Background = Ui.Brush(ThemeService.Text, 0.18);
+                border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControlHover");
             };
             border.PreviewMouseMove += (s, e) =>
             {
@@ -1025,78 +1118,207 @@ namespace DesktopBar.UI
                 if (Math.Abs(pos.X - dragStart.Value.X) < SystemParameters.MinimumHorizontalDragDistance
                     && Math.Abs(pos.Y - dragStart.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
                 dragTaken = true;
-                // 文件拖出用"原文件名的硬链接"作为拖拽源，落点文件名才是原始名字
-                // （$R 文件名是随机的）；同目录硬链接同卷瞬时创建，结束后清理。
-                string dragPath = item.DataPath;
+                // $R 文件名是随机的；文件用硬链接、目录用临时副本，均使用原始名称拖出。
+                string dragPath = null;
                 string tempLink = null;
+                bool prepared = false;
                 if (!item.IsDirectory)
                 {
                     try
                     {
                         string linkDir = FilePath.GetDirectoryName(item.DataPath) ?? "";
                         tempLink = FileClipboard.UniqueDest(item.Name, linkDir);
-                        NativeMethods.CreateHardLink(tempLink, item.DataPath);
+                        if (!NativeMethods.CreateHardLink(tempLink, item.DataPath))
+                            throw new IOException("无法创建拖拽硬链接");
                         dragPath = tempLink;
+                        prepared = true;
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        App.Log("准备回收站文件拖出失败: " + ex.Message);
                         if (tempLink != null && File.Exists(tempLink)) { try { File.Delete(tempLink); } catch { } }
                         tempLink = null;
-                        dragPath = item.DataPath;
                     }
+                }
+                else
+                {
+                    var prepare = OperationProgressDialog.RunWithDispatcherPumpDetailed("正在准备拖出", true, 1,
+                        progress => Task.Run(() =>
+                        {
+                            try
+                            {
+                                tempLink = FileClipboard.CreateNamedTemporaryCopy(item.DataPath, item.Name);
+                                dragPath = tempLink;
+                                prepared = true;
+                                progress.Report(1, item.Name, true);
+                            }
+                            catch (Exception ex)
+                            {
+                                App.Log("准备回收站文件夹拖出失败: " + ex.Message);
+                                progress.Report(1, "操作失败", false);
+                            }
+                        }));
+                    if (!prepare.Started) prepared = false;
+                }
+                if (!prepared)
+                {
+                    dragTaken = false;
+                    ConfirmDialog.Notice("拖出失败", "无法以原始名称准备“" + item.Name + "”。");
+                    return;
                 }
                 var data = new DataObject(DataFormats.FileDrop, new[] { dragPath });
                 data.SetData("Preferred DropEffect", FileClipboard.EffectStream(FileClipboard.MoveEffect));
                 var effect = DragDrop.DoDragDrop(border, data, DragDropEffects.Move);
-                try { if (tempLink != null && File.Exists(tempLink)) File.Delete(tempLink); } catch { }
+                try
+                {
+                    if (!string.IsNullOrEmpty(tempLink))
+                    {
+                        if (Directory.Exists(tempLink)) Directory.Delete(tempLink, true);
+                        else if (File.Exists(tempLink)) File.Delete(tempLink);
+                    }
+                }
+                catch (Exception ex) { App.Log("清理回收站拖拽临时项目失败: " + ex.Message); }
                 if ((effect & DragDropEffects.Move) != 0)
                 {
-                    // 若拖到了我们的其他面板，内容已被移动走；这里只做兜底删除和元数据清理。
-                    try
-                    {
-                        if (item.IsDirectory) Directory.Delete(item.DataPath, true);
-                        else File.Delete(item.DataPath);
-                    }
-                    catch (Exception ex) { App.Log("移出回收站内容失败: " + ex.Message); }
-                    try { File.Delete(item.MetaFile); } catch { }
-                    LoadItems();
+                    // 只有 $R 内容和 $I 元数据都清理成功，才算完成拖出；否则保留元数据以便还原。
+                    bool dataDeleted = false;
+                    bool metaDeleted = false;
+                    var result = OperationProgressDialog.RunWithDispatcherPumpDetailed("正在完成移动", true, 1,
+                        progress =>
+                        {
+                            try
+                            {
+                                if (item.IsDirectory) Directory.Delete(item.DataPath, true);
+                                else File.Delete(item.DataPath);
+                                dataDeleted = true;
+                            }
+                            catch (Exception ex) { App.Log("移出回收站内容失败: " + ex.Message); }
+                            if (dataDeleted)
+                            {
+                                try
+                                {
+                                    File.Delete(item.MetaFile);
+                                    metaDeleted = true;
+                                }
+                                catch (Exception ex) { App.Log("清理回收站元数据失败: " + ex.Message); }
+                            }
+                            progress.Report(1, item.Name, dataDeleted && metaDeleted);
+                            return Task.CompletedTask;
+                        });
+                    if (result.Started && dataDeleted && metaDeleted) LoadItems();
+                    else if (result.Started)
+                        ConfirmDialog.Notice("移出回收站失败", "“" + item.Name + "”未能完整移出，原项目仍保留在回收站中。");
                 }
                 dragStart = null;
             };
             border.MouseLeftButtonUp += (s, e) =>
             {
                 AnimateItemBack(transform);
-                border.Background = Ui.Brush(ThemeService.Text, 0.10);
+                border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
                 if (dragTaken) { dragTaken = false; e.Handled = true; return; }
-                if (RecycleBin.Restore(item)) LoadItems();
-                else ConfirmDialog.Notice("还原失败", "还原“" + item.Name + "”失败，请检查原始位置是否可用。");
+                RestoreItemAsync(item);
                 e.Handled = true;
             };
             border.MouseRightButtonUp += (s, e) => { ShowItemMenu(item); e.Handled = true; };
             return border;
         }
 
-        private void ShowItemMenu(RecycleItem item)
+        private async void RestoreItemAsync(RecycleItem item)
         {
-            TrackFlyout(FlyoutMenu.Show(new List<FlyoutItem>
+            bool success = false;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在还原文件", true, 1,
+                progress => Task.Run(() =>
+                {
+                    success = RecycleBin.Restore(item);
+                    progress.Report(1, item.Name, success);
+                }));
+            if (_disposed) return;
+            if (!result.Started)
             {
-                new FlyoutItem("还原", () =>
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
+            if (success) LoadItems();
+            else ConfirmDialog.Notice("还原失败", "还原“" + item.Name + "”失败，请检查原始位置是否可用。");
+        }
+
+        private async void DeletePermanentlyAsync(RecycleItem item)
+        {
+            bool dataDeleted = false;
+            bool metaDeleted = false;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在永久删除", true, 1,
+                progress => Task.Run(() =>
                 {
-                    if (RecycleBin.Restore(item)) LoadItems();
-                    else ConfirmDialog.Notice("还原失败", "还原“" + item.Name + "”失败，请检查原始位置是否可用。");
-                }),
-                new FlyoutItem("复制", () => FileClipboard.CopyFiles(new[] { item.DataPath })),
-                new FlyoutItem("永久删除", () =>
-                {
-                    if (!ConfirmDialog.Show("永久删除", "“" + item.Name + "”将被永久删除且无法恢复。\n确定要继续吗？", "永久删除")) return;
                     try
                     {
                         if (item.IsDirectory) Directory.Delete(item.DataPath, true);
                         else File.Delete(item.DataPath);
-                        File.Delete(item.MetaFile);
+                        dataDeleted = true;
+                        try
+                        {
+                            File.Delete(item.MetaFile);
+                            metaDeleted = true;
+                        }
+                        catch (Exception ex) { App.Log("永久删除元数据失败: " + ex.Message); }
                     }
                     catch (Exception ex) { App.Log("永久删除失败: " + ex.Message); }
-                    LoadItems();
+                    progress.Report(1, item.Name, dataDeleted && metaDeleted);
+                }));
+            if (_disposed) return;
+            if (!result.Started)
+            {
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
+            if (dataDeleted && metaDeleted) LoadItems();
+            else if (dataDeleted)
+                ConfirmDialog.Notice("永久删除部分完成", "内容已删除，但回收站元数据清理失败，请检查回收站。");
+            else
+                ConfirmDialog.Notice("永久删除失败", "无法删除“" + item.Name + "”。");
+            if (!dataDeleted || !metaDeleted) LoadItems();
+        }
+
+        private async void CopyRecycleItem(RecycleItem item)
+        {
+            string temporaryPath = null;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在准备复制", true, 1,
+                progress => Task.Run(() =>
+                {
+                    try
+                    {
+                        temporaryPath = FileClipboard.CreateNamedTemporaryCopy(item.DataPath, item.Name);
+                        progress.Report(1, item.Name, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        App.Log("复制回收站项目失败: " + ex.Message);
+                        progress.Report(1, "操作失败", false);
+                    }
+                }));
+            if (!result.Started)
+            {
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
+            bool copied = !string.IsNullOrEmpty(temporaryPath)
+                && FileClipboard.WriteTemporaryPath(temporaryPath);
+            if (!copied)
+            {
+                FileClipboard.CleanupTemporaryPath(temporaryPath);
+                ConfirmDialog.Notice("复制失败", "无法复制“" + item.Name + "”。");
+            }
+        }
+
+        private void ShowItemMenu(RecycleItem item)
+        {
+            TrackFlyout(FlyoutMenu.Show(new List<FlyoutItem>
+            {
+                new FlyoutItem("还原", () => RestoreItemAsync(item)),
+                new FlyoutItem("复制", () => CopyRecycleItem(item)),
+                new FlyoutItem("永久删除", () =>
+                {
+                    if (!ConfirmDialog.ShowDanger("永久删除", "“" + item.Name + "”将被永久删除且无法恢复。\n确定要继续吗？", "永久删除")) return;
+                    DeletePermanentlyAsync(item);
                 }, danger: true)
             }));
         }
@@ -1128,13 +1350,26 @@ namespace DesktopBar.UI
             }, "回收站"));
         }
 
-        private void EmptyBin()
+        private async void EmptyBin()
         {
-            if (!ConfirmDialog.Show("清空回收站", "所有项目将被永久删除，此操作不可恢复。\n确定要继续吗？", "清空回收站"))
+            if (!ConfirmDialog.ShowDanger("清空回收站", "所有项目将被永久删除，此操作不可恢复。\n确定要继续吗？", "清空回收站"))
                 return;
-            int hr = NativeMethods.EmptyRecycleBin();
+            int hr = int.MinValue;
+            var result = await OperationProgressDialog.RunDetailedAsync("正在清空回收站", true, 1,
+                progress => Task.Run(() =>
+                {
+                    hr = NativeMethods.EmptyRecycleBin();
+                    progress.Report(1, hr == 0 ? "已完成" : "操作失败", hr == 0);
+                }));
+            if (!result.Started)
+            {
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
             App.Log("清空回收站 hr=0x" + hr.ToString("X8"));
-            LoadItems();
+            if (!_disposed) LoadItems();
+            if (hr != 0)
+                ConfirmDialog.Notice("清空回收站失败", "Windows 未能完成清空操作。\n错误代码: 0x" + hr.ToString("X8"));
         }
 
     }

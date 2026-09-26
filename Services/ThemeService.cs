@@ -11,6 +11,8 @@ namespace DesktopBar.Services
     {
         public static event Action Changed;
         private static bool _started;
+        private static bool _stopped;
+        private static UserPreferenceChangedEventHandler _preferenceChanged;
         private static string _background = "#14141C";
         private static string _text = "#FFFFFF";
 
@@ -20,18 +22,35 @@ namespace DesktopBar.Services
 
         public static void Start()
         {
-            if (_started) return;
+            if (_started || _stopped) return;
             _started = true;
-            SystemEvents.UserPreferenceChanged += (s, e) => Refresh();
+            _preferenceChanged = (s, e) => Refresh();
+            SystemEvents.UserPreferenceChanged += _preferenceChanged;
             Refresh();
+        }
+
+        public static void Stop()
+        {
+            if (!_started) return;
+            _stopped = true;
+            if (_preferenceChanged != null)
+            {
+                try { SystemEvents.UserPreferenceChanged -= _preferenceChanged; }
+                catch { }
+                _preferenceChanged = null;
+            }
+            Changed = null;
         }
 
         public static void Refresh()
         {
+            if (_stopped) return;
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher != null && !dispatcher.CheckAccess())
             {
-                dispatcher.BeginInvoke(new Action(Refresh));
+                if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) return;
+                try { dispatcher.BeginInvoke(new Action(Refresh)); }
+                catch (InvalidOperationException) { }
                 return;
             }
             var s = App.Settings;
@@ -54,6 +73,9 @@ namespace DesktopBar.Services
                 resources["ThemePanelBorder"] = s.BorderEnabled
                     ? Ui.Brush(s.BorderColor, s.BorderOpacity)
                     : System.Windows.Media.Brushes.Transparent;
+                resources["ThemePanelSubtle"] = Ui.Brush(_text, 0.06);
+                resources["ThemePanelControl"] = Ui.Brush(_text, 0.10);
+                resources["ThemePanelControlHover"] = Ui.Brush(_text, 0.18);
                 resources["ThemePanelHover"] = Ui.Brush(_text, 0.12);
                 resources["ThemePanelSelected"] = Ui.Brush(_text, 0.20);
                 resources["ThemePanelText"] = Ui.Brush(_text, 1);

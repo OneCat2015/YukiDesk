@@ -146,7 +146,12 @@ namespace DesktopBar
             _modules.Add(_power);
             left.Children.Add(_power);
 
-            // 回收站：放在电源和小文件夹之间
+            // 此电脑：放在电源和回收站之间
+            var thisPc = new ThisPcModule(S.SettingsBtn);
+            _modules.Add(thisPc);
+            left.Children.Add(thisPc);
+
+            // 回收站：放在此电脑和小文件夹之间
             _recycle = new RecycleBinModule(S.SettingsBtn);
             _modules.Add(_recycle);
             left.Children.Add(_recycle);
@@ -321,7 +326,6 @@ namespace DesktopBar
             {
                 if (music == null || !ReferenceEquals(_music, music)) return;
                 music.Update(info);
-                music.SetSeek(position => _ = _media?.SeekAsync(position));
                 _mediaAvailable = info.HasSession;
                 SetModuleVisibility(music, S.ShowMusic && _mediaAvailable);
             };
