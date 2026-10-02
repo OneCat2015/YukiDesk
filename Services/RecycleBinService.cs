@@ -35,12 +35,15 @@ namespace DesktopBar.Services
                 if (string.IsNullOrEmpty(sid)) return result;
                 foreach (var drive in DriveInfo.GetDrives())
                 {
-                    if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
+                    // 可移动盘也有自己的 $Recycle.Bin:列表看不到它们,但"清空回收站"却会清到,
+                    // 列表与破坏性操作范围必须一致,所以一并纳入(IsReady 挡掉未插入的盘)。
+                    if ((drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable)
+                        || !drive.IsReady) continue;
                     string userBin = Path.Combine(drive.RootDirectory.FullName, "$Recycle.Bin", sid);
                     if (!Directory.Exists(userBin)) continue;
                     string[] metaFiles;
                     try { metaFiles = Directory.GetFiles(userBin, "$I*"); }
-                    catch { continue; }
+                    catch (Exception ex) { App.Log("枚举回收站目录失败(" + drive.Name + "): " + ex.Message); continue; }
                     foreach (var meta in metaFiles)
                     {
                         if (TryReadMeta(meta, out var item)) result.Add(item);
@@ -102,7 +105,7 @@ namespace DesktopBar.Services
             }
         }
 
-        /// <summary>把项目移回原始位置；原位置被占用时自动加序号后缀。</summary>
+                /// <summary>把项目移回原始位置；原位置被占用时自动加序号后缀。</summary>
         public static bool Restore(RecycleItem item)
         {
             try
@@ -122,7 +125,16 @@ namespace DesktopBar.Services
                 if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
                 if (item.IsDirectory) Directory.Move(item.DataPath, target);
                 else File.Move(item.DataPath, target);
-                File.Delete(item.MetaFile);
+                try
+                {
+                    File.Delete(item.MetaFile);
+                }
+                catch (Exception ex)
+                {
+                    // 数据已还原成功;元数据删除失败只造成幻影条目(下次枚举自然消失),
+                    // 不能把它报成"还原失败"让用户误以为文件没还原。
+                    App.Log("还原成功但删除回收站元数据失败: " + ex.Message);
+                }
                 return true;
             }
             catch (Exception ex)

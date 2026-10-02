@@ -16,7 +16,7 @@ namespace DesktopBar.Services
     {
         private const string MapName = @"Global\YukiDeskTctl";
         private const string MasterMutexName = "YukiDesk_SingleInstance_Mutex";
-        private const int Magic = 0x544C4339;   // 'YCLT'
+        private const int Magic = 0x544C4339;   // 小端内存中即 "9CLT"(非字符串语义,仅作魔数)
         private const int Capacity = 16;
         private const long StaleTicks = 60_000_000; // 6 秒(TimeSpan.FromSeconds(6).Ticks)
 
@@ -29,46 +29,58 @@ namespace DesktopBar.Services
 
         private static void Loop(Action finished)
         {
+            // 任何退出路径(主进程消失/异常)都必须调 finished() 结束 Dispatcher,
+            // 否则这个提权进程会以 OnExplicitShutdown 状态永久滞留成僵尸。
             try
             {
-                using var mmf = MemoryMappedFile.CreateOrOpen(MapName, Capacity);
-                using var view = mmf.CreateViewAccessor();
-                int missed = 0;
-                for (int i = 0; ; i++)
-                {
-                    double t = PawnIoTctl.ReadCpuTempC();
-                    try
-                    {
-                        view.Write(0, Magic);
-                        view.Write(4, (float)t);
-                        view.Write(8, DateTime.UtcNow.Ticks);
-                    }
-                    catch { }
-                    // 主进程互斥体每 15 秒探测一次;连续两次不存在则退出。
-                    if (i % 15 == 0)
-                    {
-                        try
-                        {
-                            using (var m = Mutex.OpenExisting(MasterMutexName))
-                            {
-                            }
-                            missed = 0;
-                        }
-                        catch
-                        {
-                            if (++missed >= 2)
-                            {
-                                finished();
-                                return;
-                            }
-                        }
-                    }
-                    Thread.Sleep(1000);
-                }
+                RunLoop(finished);
             }
             catch (Exception ex)
             {
-                App.Log("温度从属进程异常退出: " + ex.Message);
+                App.Log("温度从属进程异常退出: " + ex);
+            }
+            finally
+            {
+                finished();
+            }
+        }
+
+        private static void RunLoop(Action finished)
+        {
+            using var mmf = MemoryMappedFile.CreateOrOpen(MapName, Capacity);
+            using var view = mmf.CreateViewAccessor();
+            int missed = 0;
+            for (int i = 0; ; i++)
+            {
+                double t = PawnIoTctl.ReadCpuTempC();
+                try
+                {
+                    view.Write(0, Magic);
+                    view.Write(4, (float)t);
+                    view.Write(8, DateTime.UtcNow.Ticks);
+                }
+                catch { }
+                // 主进程互斥体探测:前 2 分钟每 30 秒一次(容忍 .NET 冷启动慢于从属),
+                // 之后每 60 秒一次;连续 3 次不存在才退出,给"用户关自启后手动启动"留活路。
+                if (i % (i < 4 ? 30 : 60) == 0)
+                {
+                    try
+                    {
+                        using (var m = Mutex.OpenExisting(MasterMutexName))
+                        {
+                        }
+                        missed = 0;
+                    }
+                    catch
+                    {
+                        if (++missed >= 3)
+                        {
+                            // finally 会统一调 finished(),这里直接返回即可。
+                            return;
+                        }
+                    }
+                }
+                Thread.Sleep(1000);
             }
         }
 

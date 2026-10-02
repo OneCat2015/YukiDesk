@@ -32,7 +32,7 @@
 ## 构建与运行
 
 ```bash
-cd YukiDesk
+cd DesktopBar
 dotnet build -c Release
 # 运行
 bin/Release/net8.0-windows10.0.19041.0/YukiDesk.exe
@@ -84,11 +84,11 @@ installers\YukiDesk-Setup-arm64-slim-<版本>.exe  ← 仅 ARM64 设备,需已�
 | 功能 | 用法 |
 |---|---|
 | 设置按钮 | 最左圆形选项卡,点击打开设置窗口 |
-| 小文件夹 | 悬停选项卡向下展开文件面板(最高半屏,滚轮翻页,少则自动缩小);48px 图标;**单击打开**;把文件/文件夹拖到选项卡或面板上默认移动，同名项目可替换或自动编号保留为副本 |
-| 回收站 | 圆形垃圾桶按钮;**单击展开**(悬停不展开)当前用户回收站内容,单击项目还原到原位置;右键按钮弹出"清空回收站",确认后执行 |
+| 小文件夹 | 悬停选项卡向下展开文件面板(最高半屏,滚轮翻页,少则自动缩小);48px 图标;**单击打开**;把文件/文件夹拖到选项卡或面板上**固定为移动语义**(来源只允许复制时拒绝拖放),同名项目可替换或自动编号保留为副本 |
+| 回收站 | 圆形垃圾桶按钮;**单击展开**(悬停不展开)当前用户回收站内容(含可移动盘),**双击项目**还原到原位置,右键项目可还原/复制/永久删除;右键按钮弹出"清空回收站",确认后执行 |
 | 音乐播放器 | 播放音乐时自动出现(QQ音乐/网易云/Spotify/浏览器等,基于系统 SMTC);悬停展开大封面、歌名、歌手和播放控制，不显示时间或进度条 |
 | 音频频谱 | 音乐播放器左侧的胶囊频谱:实时采集系统播放声音,16 根对数频段柱随节拍跳动(自动增益,小音量也明显)。可在设置中关闭 |
-| 性能监测 | 频谱左侧的四枚胶囊:CPU 占用率、GPU 占用率(多显卡时可在设置中选择监测哪块)、内存占用、网络上下行;鼠标放上去自动展开详情页——CPU/GPU 显示占用、温度、频率,内存显示占用/已用/容量/内存频率,网络显示上下行速率。数据源:GPU 温度/频率 AMD 走显卡驱动 ADL、NVIDIA 走 NVML;CPU 温度默认按"APU 真 CPU 温度 → ACPI 热区 → CPU 侧 SoC 传感器"自动降级;AMD 平台可在设置里一键安装开源的 [PawnIO](https://github.com/namazso/PawnIO) 驱动运行时(一次管理员授权)读取原生 Tctl 核心温度(与 AIDA64/HWiNFO 同源);每项可在设置中单独开关,全部隐藏时不采样 |
+| 性能监测 | 频谱左侧的四枚胶囊:CPU 占用率、GPU 占用率(多显卡时可在设置中选择监测哪块)、内存占用、网络上下行;鼠标放上去自动展开详情页——CPU/GPU 显示占用、温度、频率,内存显示占用/已用/容量/内存频率,网络显示上下行速率。数据源:GPU 温度/频率 AMD 走显卡驱动 ADL、NVIDIA 走 NVML;CPU 温度默认按"原生 Tctl → APU 真 CPU 温度 → ACPI 热区 → CPU 侧 SoC 传感器"自动降级;AMD 平台可在设置里一键安装开源的 [PawnIO](https://github.com/namazso/PawnIO) 驱动运行时(一次管理员授权,创建登录时运行的提权温度任务,可在设置里停用,卸载 YukiDesk 时自动清理)读取原生 Tctl 核心温度(与 AIDA64/HWiNFO 同源);每项可在设置中单独开关,全部隐藏时不采样 |
 | 音量 | 右侧圆形喇叭按钮;展开后只调整 Windows 当前默认输出设备，不提供设备切换下拉框 |
 | 时间 | 悬停展开星期/日期/农历;折叠态显示项(秒数/日期/星期)与位置(靠右/居中)在设置中调整 |
 
@@ -111,37 +111,44 @@ installers\YukiDesk-Setup-arm64-slim-<版本>.exe  ← 仅 ARM64 设备,需已�
 
 - **展开面板**:鼠标悬停在对应选项卡上即可展开（回收站是单击展开）；移开后延迟自动收回，可在设置中调整延迟。
 - **小文件夹**:单击文件直接打开；把任意文件/文件夹拖到选项卡或面板上默认移动，同名项目可替换或作为副本；面板内支持右键菜单（粘贴）。
-- **回收站**:单击项目还原到原位置；右键垃圾桶按钮可"清空回收站"（有确认弹窗）。
+- **回收站**:双击项目还原到原位置(右键项目也有还原/复制/永久删除)；右键垃圾桶按钮可"清空回收站"（有确认弹窗）。
 - **音乐控制**:展开后点击上一首/暂停/下一首；面板不显示时间或进度条。
 - **音量**:滚轮或拖动滑块调节、点击喇叭静音，只作用于当前 Windows 默认输出设备。
 - **托盘图标**:右键托盘可打开设置、显示/隐藏顶栏、打开数据目录或退出；顶栏被隐藏时从托盘重新显示。
 - **开机自启**:在设置 → 通用里开关，写入当前用户注册表启动项，不需要管理员权限。
-- **卸载**:系统"设置 → 应用"或开始菜单卸载项即可移除；配置和日志保留在 `%AppData%\YukiDesk`，可手动删除。
+- **卸载**:系统"设置 → 应用"或开始菜单卸载项即可移除；卸载时会一并清理登录温度任务、开机自启注册表值与 %TEMP% 里的更新/脚本残留。配置和日志保留在 `%AppData%\YukiDesk`，可手动删除。若启用过原生温度,PawnIO 本体不会被卸载,可在系统"应用"中单独卸载。
 
 ## 技术架构
 
-**技术栈**: C# / .NET 8 / WPF(`net8.0-windows10.0.19041.0`,引用 Windows SDK WinRT 投影),单进程 `YukiDesk.exe`,支持 x64 与 ARM64。全部原生 Windows API + 托管代码实现,无第三方运行时依赖。
+**技术栈**: C# / .NET 8 / WPF(`net8.0-windows10.0.19041.0`,引用 Windows SDK WinRT 投影),主进程 `YukiDesk.exe`,支持 x64 与 ARM64。全部原生 Windows API + 托管代码实现,无第三方 UI 框架依赖;唯一的可选内核组件是用户主动启用的 PawnIO(见"第三方组件"),启用后另有一个无窗口的提权温度从属进程(同一 exe 以 `--tempslave` 参数运行)。
 
 ```
 YukiDesk/
 ├── App.xaml(.cs)        应用入口:全局异常日志、单实例、托盘、设置加载
 ├── MainWindow.cs        顶栏主窗口:桌面层钉底、AppBar 注册、模块布局
+├── SettingsWindow.xaml(.cs) 设置窗口(根目录)
 ├── Models/Settings.cs   设置模型(可持久化 POCO)
 ├── Services/
 │   ├── SpectrumService  WASAPI 环回采集 + FFT 频谱分析(后台线程)
-│   ├── PerfService      CPU/GPU/内存/网络采样(GetSystemTimes、DXGI 显卡枚举、GPU 引擎与网络接口计数器)
+│   ├── PerfService      CPU/GPU/内存/网络采样(PDH 计数器、DXGI、AMD ADL PMLog、NVML)
+│   ├── PawnIoTctl       PawnIO 通道读取 AMD 原生 Tctl(SMN)
+│   ├── TemperatureSlave 温度从属进程(--tempslave):读 Tctl 写全局共享内存
 │   ├── MediaService     SMTC 全局媒体会话(曲名/封面/播放状态/控制)
 │   ├── VolumeService    MMDevice COM 音量/静音(跟随当前默认设备)
+│   ├── FileClipboard    系统剪贴板复制/剪切/粘贴与移动/替换语义
+│   ├── RecycleBinService 回收站 $I/$R 解析、枚举与还原
+│   ├── ThemeService     主题解析、壁纸明暗自动适配与系统偏好监听
+│   ├── DesktopSpaceService Shell AppBar 桌面空间预留
 │   ├── SettingsService  设置读写(原子写 + 备份 + 损坏隔离)
-│   ├── UpdateService    GitHub Releases 更新检查/下载(系统代理、按架构与运行时类型选包)
+│   ├── UpdateService    GitHub Releases 更新检查/下载(SHA-256 校验、按架构与运行时类型选包)
+│   ├── Festivals / Lunar 节气节日与农历
 │   └── AutoStartService 开机自启(当前用户 Run 键)
 ├── UI/
 │   ├── ModuleBase       模块基类:选项卡 + 悬停展开面板框架
 │   ├── Modules.cs       小文件夹/回收站/音乐/频谱/音量/性能监测等具体模块
-│   ├── SettingsWindow   设置窗口
 │   ├── ShellOpen        文件打开(资源管理器集成)
-│   └── FlyoutMenu 等    右键菜单/确认框等通用控件
-└── Interop/NativeMethods.cs  Win32 P/Invoke(SetWindowPos/AppBar/Shell 图标/注册表等)
+│   └── FlyoutMenu 等    右键菜单/确认框/进度窗等通用控件
+└── Interop/NativeMethods.cs  Win32 P/Invoke(SetWindowPos/AppBar/Shell 图标/Authenticode 校验等)
 ```
 
 关键实现机制:
@@ -173,21 +180,21 @@ YukiDesk/
   imageres.dll/shell32.dll 的系统默认文件/文件夹图标。`.lnk` 与 `.url` 只在界面隐藏后缀,
   实际路径和打开行为保持不变。
 - **音频频谱**:WASAPI 共享模式环回采集系统播放流(后台线程),2048 点 FFT 加汉宁窗,
-  按 40Hz~15kHz 对数划分 22 频段;攻击即时/释放平滑,系统默认输出设备变化或静音时自动重连/回落。
+  按 40Hz~15kHz 对数划分 16 频段;攻击即时/释放平滑,系统默认输出设备变化或静音时自动重连/回落。
   只读系统音频,不写入音量、不影响播放。
 - 若当前聚焦窗口盖住了药丸,顶栏会被一并盖住 —— 这正是"只存在于桌面层"的语义。
 
 ## 已知边界
 
 - 顶栏只覆盖主屏。
-- 音量模块始终跟随 Windows 当前默认播放设备，不提供设备切换下拉框；默认设备变化后打开面板会重新绑定。
+- 音量模块始终跟随 Windows 当前默认播放设备，不提供设备切换下拉框；面板打开期间、滚轮/静音写入前都会检测并跟随默认设备变化。
 - 回收站模块只显示**当前用户**的回收站项目(其他用户的目录需要管理员权限)；还原使用 $I 元数据里的原始路径,原位置已被占用时自动加 "(1)" 序号后缀。
 - 音乐模块只显示曲名、歌手、封面和播放控制，不显示时间或进度条；播放器仍通过 SMTC 提供播放状态。
 - 音乐选项卡依赖播放器上报 SMTC;个别播放器关闭该功能时无法检测。
 
 ## 第三方组件
 
-- [PawnIO](https://github.com/namazso/PawnIO)(namazso,GPL-2.0):可选的内核驱动运行时,用于读取 AMD 原生 CPU 温度。YukiDesk 不随附其安装包,而是在设置页点击安装时从官方 GitHub Release 下载;通过设备 IOCTL 通信,与 PawnIO 保持独立。
+- [PawnIO](https://github.com/namazso/PawnIO)(namazso,GPL-2.0):可选的内核驱动运行时,用于读取 AMD 原生 CPU 温度。YukiDesk 不随附其安装包,而是在设置页点击安装时从官方 GitHub Release 下载;下载后会先校验 Authenticode 数字签名可信才提权执行。PawnIO 驱动加载模块时也会自行验证模块二进制的官方签名;不使用时可卸载,不影响 YukiDesk 其他功能。
 - AMDFamily17 模块(LGPL-2.1):编译自 [PawnIO.Modules](https://github.com/namazso/PawnIO.Modules),二进制取自 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 资源,以嵌入资源形式随应用分发。
 
 ## 声明

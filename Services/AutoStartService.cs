@@ -18,7 +18,8 @@ namespace DesktopBar.Services
             catch { return false; }
         }
 
-        public static void Set(bool enabled)
+        /// <summary>写入/删除 HKCU 自启项;返回是否与目标状态一致(供 UI 回读校正开关)。</summary>
+        public static bool Set(bool enabled)
         {
             try
             {
@@ -37,8 +38,9 @@ namespace DesktopBar.Services
                     k.DeleteValue(ValueName, false);
                     k.DeleteValue("DesktopBar", false);
                 }
+                return IsEnabled() == enabled;
             }
-            catch (Exception ex) { App.Log("设置自启失败: " + ex.Message); }
+            catch (Exception ex) { App.Log("设置自启失败: " + ex.Message); return false; }
         }
     }
 }

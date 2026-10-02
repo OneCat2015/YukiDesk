@@ -15,6 +15,8 @@ namespace DesktopBar.Services
         private string _selectedId = "";
         private bool _disposed;
 
+        private static long _lastReadFailLogTick = -60000;
+
         public float? GetVolume()
         {
             try
@@ -25,7 +27,13 @@ namespace DesktopBar.Services
             }
             catch (Exception ex)
             {
-                App.Log("读取系统音量失败(状态未知): " + ex.Message);
+                // 面板打开期间每 800ms 轮询一次,失败日志必须节流,否则无音频设备时刷爆日志。
+                long now = Environment.TickCount64;
+                if (now - _lastReadFailLogTick > 30000)
+                {
+                    _lastReadFailLogTick = now;
+                    App.Log("读取系统音量失败(状态未知): " + ex.Message);
+                }
                 InvalidateEndpoint();
                 return null;
             }
@@ -41,7 +49,12 @@ namespace DesktopBar.Services
             }
             catch (Exception ex)
             {
-                App.Log("读取静音状态失败(状态未知): " + ex.Message);
+                long now = Environment.TickCount64;
+                if (now - _lastReadFailLogTick > 30000)
+                {
+                    _lastReadFailLogTick = now;
+                    App.Log("读取静音状态失败(状态未知): " + ex.Message);
+                }
                 InvalidateEndpoint();
                 return null;
             }
@@ -262,13 +275,17 @@ namespace DesktopBar.Services
             int SetChannelVolumeLevelScalar(uint channel, float level, Guid context);
             int GetChannelVolumeLevel(uint channel, out float level);
             int GetChannelVolumeLevelScalar(uint channel, out float scalar);
-            int SetMute(bool mute, Guid context);
-            int GetMute(out bool mute);
+            int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, Guid context);
+            // IAudioEndpointVolume 的 BOOL 是 4 字节;不带 MarshalAs 的 bool 按 VARIANT_BOOL(2 字节)
+            // 封送,GetMute 存在 2 字节越界写,必须显式指定。
+            int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
             int GetVolumeStepInfo(out uint step, out uint stepCount);
             int VolumeStepUp(Guid context);
             int VolumeStepDown(Guid context);
             int QueryHardwareSupport(out uint mask);
-            int GetHardwareVolumeStepInfo(out float min, out float max, out float step);
+            // 真实 vtable 末槽是 GetVolumeRange(min/max/increment dB);以前误命名为
+            // GetHardwareVolumeStepInfo,语义完全不同,虽从未调用也应改名防误用。
+            int GetVolumeRange(out float min, out float max, out float step);
         }
     }
 }

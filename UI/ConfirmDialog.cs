@@ -17,8 +17,8 @@ namespace DesktopBar.UI
     /// </summary>
     public static class ConfirmDialog
     {
-        public static bool Show(string title, string message, string confirmText = "确定")
-            => ShowInternal(title, message, confirmText, "取消", true, false);
+        public static bool Show(string title, string message, string confirmText = "确定", bool okIsDefault = true)
+            => ShowInternal(title, message, confirmText, "取消", true, false, okIsDefault);
 
         /// <summary>不可逆或高风险操作确认；默认键盘动作保持在取消侧。</summary>
         public static bool ShowDanger(string title, string message, string confirmText = "确定")
@@ -133,6 +133,9 @@ namespace DesktopBar.UI
             cancel.Click += (s, e) => { result = null; win.Close(); };
             keepBoth.Click += (s, e) => { result = ConflictChoice.KeepBoth; applyAll = checkedState; win.Close(); };
             replace.Click += (s, e) => { result = ConflictChoice.Replace; applyAll = checkedState; win.Close(); };
+            // 初始焦点给取消:此前三个按钮都无焦点/无默认键,键盘用户只剩 Esc;
+            // Enter 落在取消侧,永远不能误触发"替换"这种会移走旧项目的动作。
+            win.Loaded += (s, e) => cancel.Focus();
 
             var buttons = new StackPanel
             {
@@ -194,7 +197,7 @@ namespace DesktopBar.UI
         }
 
         private static bool ShowInternal(string title, string message, string confirmText, string cancelText,
-            bool showCancel, bool danger)
+            bool showCancel, bool danger, bool okIsDefault = true)
         {
             bool result = false;
             var win = new Window
@@ -235,7 +238,8 @@ namespace DesktopBar.UI
                 Style = (Style)Application.Current.FindResource("BtnTheme"),
                 MinWidth = 92,
                 Margin = new Thickness(0, 0, 10, 0),
-                IsCancel = true,
+                // Notice(单按钮)时取消按钮折叠,不再注册 IsCancel,避免 Esc 走两条等价通道。
+                IsCancel = showCancel,
                 Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed
             };
             var ok = new Button
@@ -243,7 +247,7 @@ namespace DesktopBar.UI
                 Content = confirmText,
                 Style = (Style)Application.Current.FindResource(danger ? "BtnThemeDanger" : "BtnTheme"),
                 MinWidth = 92,
-                IsDefault = !danger
+                IsDefault = !danger && okIsDefault
             };
             cancel.Click += (s, e) => { result = false; win.Close(); };
             ok.Click += (s, e) => { result = true; win.Close(); };
@@ -295,7 +299,8 @@ namespace DesktopBar.UI
             };
             win.Loaded += (s, e) =>
             {
-                if (showCancel && danger) cancel.Focus();
+                // 危险确认或显式要求"默认在取消侧"时,焦点落取消键:回车/空格都不会触发确认动作。
+                if (showCancel && (danger || !okIsDefault)) cancel.Focus();
                 else ok.Focus();
             };
             win.ShowDialog();

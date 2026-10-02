@@ -15,8 +15,9 @@ namespace DesktopBar.Models
 
     public class AppSettings
     {
-        /// <summary>配置迁移版本；只对旧配置执行一次兼容转换。</summary>
-        public int SchemaVersion { get; set; } = 2;
+        // 迁移版本用可空 int:旧配置没有该字段时反序列化得到 null(而不是 2),
+        // 迁移门 `null 或 < 2` 才真的会对旧配置执行一次;写回时已固化为 2。
+        public int? SchemaVersion { get; set; }
         // 顶栏背景仍可独立关闭，以保持桌面点击穿透。
         public string BarBgColor { get; set; } = "#000000";
         public double BarBgOpacity { get; set; } = 0.0;

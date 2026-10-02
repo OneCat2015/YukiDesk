@@ -19,6 +19,8 @@ namespace DesktopBar.Services
         public string Notes { get; init; }
         public string DownloadUrl { get; init; }
         public string FileName { get; init; }
+        /// <summary>Release 内 SHA256SUMS 文件的下载地址;缺失时跳过完整性校验(向后兼容旧 Release)。</summary>
+        public string ChecksumUrl { get; init; }
     }
 
     /// <summary>
@@ -106,7 +108,8 @@ namespace DesktopBar.Services
             if (!Version.TryParse(tag.TrimStart('v', 'V'), out var latest)) return null;
             if (latest <= CurrentVersion) return null;
 
-            string version = latest.ToString(3);
+            // 直接用 tag 文本匹配资产名:ToString(3) 会把 4 段版本 v1.0.8.1 截成 1.0.8 而失配。
+            string version = tag.TrimStart('v', 'V');
             string flavor = IsSelfContained ? "full" : "slim";
             var asset = FindAsset(root, ArchTag, flavor, version);
             if (asset == null && !IsSelfContained)
@@ -122,8 +125,24 @@ namespace DesktopBar.Services
                 Version = version,
                 Notes = root.GetProperty("body").GetString() ?? "",
                 DownloadUrl = asset.Value.Url,
-                FileName = asset.Value.Name
+                FileName = asset.Value.Name,
+                ChecksumUrl = FindChecksumAsset(root, version)
             };
+        }
+
+        private static string FindChecksumAsset(JsonElement root, string version)
+        {
+            string name1 = "SHA256SUMS-" + version + ".txt";
+            foreach (var asset in root.GetProperty("assets").EnumerateArray())
+            {
+                string name = asset.GetProperty("name").GetString() ?? "";
+                if (!string.Equals(name, name1, StringComparison.OrdinalIgnoreCase)) continue;
+                string url = asset.GetProperty("browser_download_url").GetString() ?? "";
+                if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                    && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+                    return url;
+            }
+            return null;
         }
 
         private static (string Name, string Url)? FindAsset(JsonElement root,
@@ -183,13 +202,36 @@ namespace DesktopBar.Services
         {
             if (string.IsNullOrEmpty(setupPath) || !File.Exists(setupPath)) return false;
             App.Log("更新: 启动安装程序 " + setupPath);
-            if (!Interop.NativeMethods.ShellExecuteOpen(setupPath))
+            System.Diagnostics.Process proc = null;
+            try
             {
-                App.Log("更新: 安装程序启动失败");
+                proc = System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(setupPath) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                App.Log("更新: 安装程序启动失败: " + ex.Message);
                 return false;
             }
-            // 给安装进程一点启动时间再退出;安装器对运行中的程序有自己的关闭提示兜底。
-            var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+            if (proc != null)
+            {
+                // 等安装器完成初始化;若它秒退(包损坏/被拦截/用户在首屏取消)就不退出 YukiDesk,
+                // 否则会出现"应用自己关了、安装却没发生"的半途消失。
+                try { proc.WaitForInputIdle(4000); } catch { }
+                bool exited;
+                try { exited = proc.HasExited; } catch { exited = false; }
+                if (exited)
+                {
+                    int code = 0;
+                    try { code = proc.ExitCode; } catch { }
+                    App.Log("更新: 安装程序启动后立即退出 code=" + code + ",YukiDesk 继续运行");
+                    try { proc.Dispose(); } catch { }
+                    return false;
+                }
+                try { proc.Dispose(); } catch { }
+            }
+            // 安装器已在运行:给一点启动缓冲再退出。
+            var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             t.Tick += (s, e) =>
             {
                 t.Stop();
@@ -197,6 +239,48 @@ namespace DesktopBar.Services
             };
             t.Start();
             return true;
+        }
+
+        /// <summary>Release 提供 SHA256SUMS-<版本>.txt 时比对下载包哈希;缺失时仅记录并放行(旧 Release 兼容)。</summary>
+        private static async Task VerifyChecksumAsync(string installerPath, UpdateInfo info)
+        {
+            if (string.IsNullOrEmpty(info.ChecksumUrl))
+            {
+                App.Log("更新: Release 未提供 SHA256SUMS,跳过完整性校验");
+                return;
+            }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            string text = await Http.GetStringAsync(info.ChecksumUrl, cts.Token);
+            string expected = ParseChecksum(text, info.FileName);
+            if (expected == null)
+            {
+                App.Log("更新: SHA256SUMS 中没有 " + info.FileName + " 条目,跳过校验");
+                return;
+            }
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            await using var fs = File.OpenRead(installerPath);
+            string actual = Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("SHA-256 不匹配(期望 " + expected + ",实际 " + actual + ")");
+            App.Log("更新: 安装包 SHA-256 校验通过");
+        }
+
+        /// <summary>解析 sha256sum 格式("<哈希>  <文件名>")的清单,返回目标文件的哈希。</summary>
+        private static string ParseChecksum(string text, string fileName)
+        {
+            foreach (var raw in (text ?? "").Split('\n'))
+            {
+                var line = raw.Trim();
+                int sep = line.IndexOfAny(new[] { ' ', '\t' });
+                if (sep <= 0) continue;
+                string hash = line.Substring(0, sep).Trim();
+                string name = line.Substring(sep + 1).Trim().TrimStart('*');
+                if (string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase)
+                    && hash.Length == 64
+                    && Uri.IsHexDigit(hash[0]) && Uri.IsHexDigit(hash[63]))
+                    return hash.ToLowerInvariant();
+            }
+            return null;
         }
 
         // ---------- 高层入口 ----------
@@ -239,11 +323,27 @@ namespace DesktopBar.Services
                 }
                 catch (Exception ex) { status?.Invoke("下载失败: " + ex.Message); return; }
 
+                // 完整性校验:Release 附带 SHA256SUMS 时比对安装包哈希,不符即删。
+                try
+                {
+                    status?.Invoke("正在校验安装包…");
+                    await VerifyChecksumAsync(path, info);
+                }
+                catch (Exception ex)
+                {
+                    try { File.Delete(path); } catch { }
+                    status?.Invoke("安装包校验失败: " + ex.Message);
+                    ConfirmDialog.Notice("更新已取消", "下载的安装包未通过完整性校验,已删除。\n" + ex.Message);
+                    return;
+                }
+
                 status?.Invoke("下载完成,可以安装。");
+                // 安装会退出应用,默认键/焦点必须在"取消"侧,回车不能直接触发安装。
                 if (!ConfirmDialog.Show("YukiDesk 更新",
-                    "新版本 v" + info.Version + " 已下载完成。\n\n立即安装吗?安装时会先退出 YukiDesk。", "立即安装")) return;
+                    "新版本 v" + info.Version + " 已下载完成。\n\n立即安装吗?安装时会先退出 YukiDesk。", "立即安装",
+                    okIsDefault: false)) return;
                 if (!InstallAndRestart(path))
-                    ConfirmDialog.Notice("更新失败", "安装程序未能启动，YukiDesk 将继续运行。");
+                    ConfirmDialog.Notice("更新未完成", "安装程序未能启动或已取消，YukiDesk 将继续运行。");
             }
             finally { Volatile.Write(ref _busy, 0); }
         }

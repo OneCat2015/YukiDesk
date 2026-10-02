@@ -130,14 +130,17 @@ namespace DesktopBar.Services
             {
                 if (Environment.GetEnvironmentVariable("YUKI_SPECTRUM_SELFTEST") == "1") SelfTest();
                 long lastErrorLog = 0;
+                int failures = 0;
                 while (!token.IsCancellationRequested)
                 {
                     try
                     {
                         RunOnce(token);
+                        failures = 0;
                     }
                     catch (Exception ex)
                     {
+                        failures++;
                         long now = Environment.TickCount64;
                         if (now - lastErrorLog > 30000)
                         {
@@ -147,8 +150,11 @@ namespace DesktopBar.Services
                     }
 
                     // 退避后重连:设备切换、端点失效都走这里。
+                    // 连续失败(如设备给出 24bit 等不支持的混音格式)时把重连间隔拉到 3 秒,
+                    // 避免每 300ms 一次"连接-失败"循环空转。
+                    int backoff = failures > 5 ? 300 : 10;
                     for (int i = 0; i < 30 && !token.IsCancellationRequested; i++)
-                        token.WaitHandle.WaitOne(10);
+                        token.WaitHandle.WaitOne(backoff);
                 }
             }
             finally
@@ -317,7 +323,7 @@ namespace DesktopBar.Services
             if (wfx.wFormatTag == 0x0003) return true; // WAVE_FORMAT_IEEE_FLOAT
             if (wfx.wFormatTag == 0xFFFE) // WAVE_FORMAT_EXTENSIBLE:SubFormat GUID 在偏移 24
             {
-                var sub = (Guid)Marshal.PtrToStructure(format + 24, typeof(Guid));
+                var sub = Marshal.PtrToStructure<Guid>(format + 24);
                 if (sub == FloatSubFormat) return true;
                 if (sub == PcmSubFormat && wfx.wBitsPerSample == 16) return false;
             }

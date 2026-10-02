@@ -91,6 +91,9 @@ namespace DesktopBar.UI
             w.ShowDialog();
 
             if (ok) result = box.Text?.Trim();
+            // 确定+空输入与取消同样返回 null:所有调用方都是"名称"类输入,
+            // 空值按取消静默处理,避免"名称无效"之类误报。
+            if (string.IsNullOrWhiteSpace(result)) return null;
             return result;
         }
     }

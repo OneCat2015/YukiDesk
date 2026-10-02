@@ -95,8 +95,20 @@ namespace DesktopBar.Services
             }
             catch (Exception ex)
             {
-                App.Log("SMTC 初始化失败: " + ex);
+                App.Log("SMTC 初始化失败(60 秒后重试): " + ex);
+                _started = false;
                 Post(() => Hook(null));
+                // 初始化瞬间 SMTC 不可用时不能永久放弃,否则音乐胶囊直到重启都不再出现。
+                Post(() =>
+                {
+                    try
+                    {
+                        var retry = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+                        retry.Tick += (s, e) => { retry.Stop(); _ = StartAsync(); };
+                        retry.Start();
+                    }
+                    catch { }
+                });
                 return;
             }
 
@@ -105,13 +117,20 @@ namespace DesktopBar.Services
             _manager.CurrentSessionChanged += _currentSessionChanged;
             _manager.SessionsChanged += _sessionsChanged;
 
-            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             _timer.Tick += OnTimerTick;
             _timer.Start();
             Hook(_manager.GetCurrentSession());
         }
 
-        private void OnTimerTick(object sender, EventArgs args) => Push(_session);
+        private void OnTimerTick(object sender, EventArgs args)
+        {
+            Push(_session);
+            // 轮询只在"正在播放"时维持高频(进度推进);暂停时降频到 1.5s,
+            // 减少常驻的同步跨进程 SMTC 调用对 UI 线程的占用。
+            var interval = _current.Playing ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromMilliseconds(1500);
+            if (_timer != null && _timer.Interval != interval) _timer.Interval = interval;
+        }
 
         private void Post(Action action)
         {
@@ -233,6 +252,8 @@ namespace DesktopBar.Services
             if (timeline.EndTime > TimeSpan.Zero && position > timeline.EndTime) position = timeline.EndTime;
         }
 
+        private static long _lastPushFailLogTick = -60000;
+
         private void Push(GlobalSystemMediaTransportControlsSession session)
         {
             if (_disposed || session == null || !ReferenceEquals(_session, session) || !_current.HasSession) return;
@@ -245,7 +266,16 @@ namespace DesktopBar.Services
                     _current.ThumbnailKey, _current.Title, _current.Artist, _current.Cover, playing, position,
                     timeline.EndTime, timeline.MaxSeekTime > timeline.MinSeekTime));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 会话失效时进度停更;至少留一条节流日志,不然"进度卡死"无线索可查。
+                long now = Environment.TickCount64;
+                if (now - _lastPushFailLogTick > 30000)
+                {
+                    _lastPushFailLogTick = now;
+                    App.Log("SMTC 进度刷新失败: " + ex.Message);
+                }
+            }
         }
 
         private void PublishEmpty(bool hasSession) => Publish(new MediaInfo(NextPublishedGeneration(), hasSession,

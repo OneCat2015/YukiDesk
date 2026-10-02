@@ -55,16 +55,18 @@ namespace DesktopBar.UI
                 Text = title,
                 FontSize = 14 * _scale,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = Ui.Brush(ThemeService.Text, 1),
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            // 进度窗是长寿命弹窗(大文件操作期间用户可切主题),颜色必须走动态资源而非快照。
+            _status.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
             _detail = new TextBlock
             {
                 FontSize = 11.5 * _scale,
-                Foreground = Ui.Brush(ThemeService.Text, 0.72),
+                Opacity = 0.72,
                 Margin = new Thickness(0, 8 * _scale, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            _detail.SetResourceReference(TextBlock.ForegroundProperty, "ThemePanelText");
 
             _progressHost = new Grid
             {
@@ -74,27 +76,29 @@ namespace DesktopBar.UI
             };
             var track = new Border
             {
-                CornerRadius = new CornerRadius(4 * _scale),
-                Background = Ui.Brush(ThemeService.Text, 0.14)
+                CornerRadius = new CornerRadius(4 * _scale)
             };
+            track.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
             _progressHost.Children.Add(track);
             _fill = new Border
             {
                 Width = 0,
+                Opacity = 0.75,
                 HorizontalAlignment = HorizontalAlignment.Left,
-                CornerRadius = new CornerRadius(4 * _scale),
-                Background = Ui.Brush(ThemeService.Text, 0.72)
+                CornerRadius = new CornerRadius(4 * _scale)
             };
+            _fill.SetResourceReference(Border.BackgroundProperty, "ThemePanelText");
             _progressHost.Children.Add(_fill);
             _indeterminateFill = new Border
             {
                 Width = 86 * _scale,
+                Opacity = 0.75,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 CornerRadius = new CornerRadius(4 * _scale),
-                Background = Ui.Brush(ThemeService.Text, 0.72),
                 Visibility = indeterminate ? Visibility.Visible : Visibility.Collapsed,
                 RenderTransform = new TranslateTransform()
             };
+            _indeterminateFill.SetResourceReference(Border.BackgroundProperty, "ThemePanelText");
             _progressHost.Children.Add(_indeterminateFill);
             if (!indeterminate)
                 _indeterminateFill.Visibility = Visibility.Collapsed;
@@ -146,6 +150,31 @@ namespace DesktopBar.UI
         }
 
         public static void BeginShutdown() => Interlocked.Exchange(ref _shuttingDown, 1);
+
+        /// <summary>
+        /// 退出时等待进行中的文件操作收尾。必须泵消息:完成回调(关进度窗/释放 Busy)
+        /// 都要经 Dispatcher 处理,纯 Thread.Sleep 会把自己等死到超时。
+        /// </summary>
+        public static void WaitForIdle(int timeoutMs)
+        {
+            if (!Busy) return;
+            App.Log("退出: 等待进行中的文件操作收尾…");
+            long deadline = Environment.TickCount64 + timeoutMs;
+            while (Busy && Environment.TickCount64 < deadline)
+            {
+                try
+                {
+                    var frame = new DispatcherFrame(true);
+                    Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,
+                        new Action(() => frame.Continue = false));
+                    Dispatcher.PushFrame(frame);
+                }
+                catch { }
+                Thread.Sleep(50);
+            }
+            App.Log(Busy ? "退出: 等待文件操作超时(" + timeoutMs + "ms),继续退出"
+                         : "退出: 文件操作已收尾");
+        }
 
         public static bool TryOpen(string title, bool indeterminate, int total, out OperationProgressDialog dialog)
         {

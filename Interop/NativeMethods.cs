@@ -17,7 +17,7 @@ namespace DesktopBar.Interop
         [DllImport("user32.dll")]
         private static extern IntPtr GetShellWindow();
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
         [DllImport("user32.dll")]
@@ -64,8 +64,9 @@ namespace DesktopBar.Interop
         public static void EnsureShown(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return;
-            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (!SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+                App.Log("EnsureShown 失败 error=" + Marshal.GetLastWin32Error());
         }
 
         [DllImport("user32.dll")]
@@ -141,7 +142,7 @@ namespace DesktopBar.Interop
                 // 因此要把"最上层的装饰窗口"移到顶栏正下方,顶栏才能贴着桌面层、盖过壁纸/图标/挂件。
                 bool moved = SetWindowPos(hwnd, above, 0, 0, 0, 0, FLAGS);
                 if (!moved)
-                    App.Log("钉底失败: SetWindowPos 返回 false");
+                    App.Log("钉底失败: SetWindowPos 返回 false error=" + Marshal.GetLastWin32Error());
             }
             catch (Exception ex) { App.Log("钉底失败: " + ex.Message); }
         }
@@ -154,8 +155,9 @@ namespace DesktopBar.Interop
         private static void UnfloatTopmost(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return;
-            SetWindowPos(hwnd, new IntPtr(-2), 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (!SetWindowPos(hwnd, new IntPtr(-2), 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+                App.Log("撤顶失败 error=" + Marshal.GetLastWin32Error());
         }
 
         // ---------- 媒体键 ----------
@@ -179,6 +181,8 @@ namespace DesktopBar.Interop
         private const uint SHERB_NOCONFIRMATION = 0x1;
         private const uint SHERB_NOPROGRESSUI = 0x2;
         private const uint SHERB_NOSOUND = 0x4;
+        /// <summary>空桶调用 SHEmptyRecycleBin 的已知返回值,实际无事发生,不应报错。</summary>
+        public const int E_UNEXPECTED = unchecked((int)0x8000FFFF);
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern int SHEmptyRecycleBin(IntPtr hwnd, string root, uint flags);
@@ -499,12 +503,12 @@ namespace DesktopBar.Interop
             public IntPtr lParam;
         }
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SystemParametersInfo(uint action, uint param, ref RECT rect, uint flags);
-        [DllImport("user32.dll")]
-        private static extern uint GetLastError();
         [DllImport("shell32.dll", SetLastError = true)]
-        private static extern uint SHAppBarMessage(uint message, ref APPBARDATA data);
+        private static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hwnd);
 
         private const uint SPI_GETWORKAREA = 0x0030;
         private const uint SPI_SETWORKAREA = 0x002F;
@@ -528,6 +532,12 @@ namespace DesktopBar.Interop
                 if (_appBarRegistered && _appBarWindow != hwnd)
                     RemoveDesktopAppBar();
 
+                // APPBARDATA.rc 契约是物理像素:height 参数与 SystemParameters 都是 DIP,
+                // 必须按目标窗口 DPI 换算,否则高缩放下预留区宽度/高度不足。
+                double dpi = 96;
+                try { dpi = GetDpiForWindow(hwnd); } catch { if (dpi <= 0) dpi = 96; }
+                if (dpi <= 0) dpi = 96;
+                double scale = dpi / 96.0;
                 var data = new APPBARDATA
                 {
                     cbSize = Marshal.SizeOf<APPBARDATA>(),
@@ -537,14 +547,14 @@ namespace DesktopBar.Interop
                     {
                         Left = 0,
                         Top = 0,
-                        Right = (int)Math.Ceiling(SystemParameters.PrimaryScreenWidth),
-                        Bottom = height
+                        Right = (int)Math.Ceiling(SystemParameters.PrimaryScreenWidth * scale),
+                        Bottom = (int)Math.Ceiling(height * scale)
                     }
                 };
 
                 if (!_appBarRegistered)
                 {
-                    uint added = SHAppBarMessage(ABM_NEW, ref data);
+                    uint added = (uint)SHAppBarMessage(ABM_NEW, ref data);
                     if (added == 0)
                     {
                         App.Log("注册桌面 AppBar 失败 error=" + Marshal.GetLastWin32Error());
@@ -554,15 +564,15 @@ namespace DesktopBar.Interop
                     _appBarWindow = hwnd;
                 }
 
-                uint queried = SHAppBarMessage(ABM_QUERYPOS, ref data);
+                uint queried = (uint)SHAppBarMessage(ABM_QUERYPOS, ref data);
                 if (queried == 0)
                 {
                     App.Log("查询桌面 AppBar 位置失败 error=" + Marshal.GetLastWin32Error());
                     RemoveDesktopAppBar();
                     return SetDesktopTopReserveFallback(height);
                 }
-                data.rc.Bottom = data.rc.Top + height;
-                uint positioned = SHAppBarMessage(ABM_SETPOS, ref data);
+                data.rc.Bottom = data.rc.Top + (int)Math.Ceiling(height * scale);
+                uint positioned = (uint)SHAppBarMessage(ABM_SETPOS, ref data);
                 if (positioned == 0)
                 {
                     App.Log("设置桌面 AppBar 位置失败 error=" + Marshal.GetLastWin32Error());
@@ -622,7 +632,7 @@ namespace DesktopBar.Interop
                         cbSize = Marshal.SizeOf<APPBARDATA>(),
                         hWnd = _appBarWindow
                     };
-                    uint removed = SHAppBarMessage(ABM_REMOVE, ref data);
+                    uint removed = (uint)SHAppBarMessage(ABM_REMOVE, ref data);
                     App.Log("桌面 AppBar 已移除 result=" + removed);
                 }
             }
@@ -656,16 +666,85 @@ namespace DesktopBar.Interop
         private const uint EWX_LOGOFF = 0x00000000;
         private const uint EWX_SHUTDOWN = 0x00000001;
         private const uint EWX_REBOOT = 0x00000002;
-        public static bool Shutdown() => ExitWindowsEx(EWX_SHUTDOWN, 0);
-        public static bool Restart() => ExitWindowsEx(EWX_REBOOT, 0);
+        private const uint EWX_POWEROFF = 0x00000008;
+        // SE_SHUTDOWN_NAME 在交互令牌中"存在但禁用",不先启用直接调 ExitWindowsEx 必然失败(ERROR_PRIVILEGE_NOT_HELD)。
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(IntPtr process, uint desiredAccess, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool LookupPrivilegeValue(string systemName, string name, out long luid);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll,
+            ref TOKEN_PRIVILEGES newState, uint bufferLength, IntPtr previous, IntPtr returnLength);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+        // C 侧 LUID 按 4 字节对齐(LUID 实为两个 DWORD):Pack=4 使 Luid 落在偏移 4、
+        // Attributes 在偏移 12、总长 16,与原生布局一致;默认打包会把 long 对齐到偏移 8,
+        // API 读到垃圾 LUID,AdjustTokenPrivileges 会报 ERROR_NOT_ALL_ASSIGNED。
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        private struct TOKEN_PRIVILEGES
+        {
+            public int PrivilegeCount;
+            public long Luid;
+            public int Attributes;
+        }
+        private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
+        private const uint TOKEN_QUERY = 0x0008;
+        private const int SE_PRIVILEGE_ENABLED = 0x00000002;
+        private const int ERROR_NOT_ALL_ASSIGNED = 1300;
+
+        /// <summary>启用当前进程令牌的 SE_SHUTDOWN_NAME 特权;返回是否已启用(或本就持有)。</summary>
+        public static bool EnableShutdownPrivilege()
+        {
+            IntPtr token = IntPtr.Zero;
+            try
+            {
+                if (!OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle,
+                        TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out token))
+                {
+                    App.Log("启用关机特权失败: OpenProcessToken err=" + Marshal.GetLastWin32Error());
+                    return false;
+                }
+                if (!LookupPrivilegeValue(null, "SeShutdownPrivilege", out long luid))
+                {
+                    App.Log("启用关机特权失败: LookupPrivilegeValue err=" + Marshal.GetLastWin32Error());
+                    return false;
+                }
+                var tp = new TOKEN_PRIVILEGES { PrivilegeCount = 1, Luid = luid, Attributes = SE_PRIVILEGE_ENABLED };
+                if (!AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero))
+                {
+                    App.Log("启用关机特权失败: AdjustTokenPrivileges err=" + Marshal.GetLastWin32Error());
+                    return false;
+                }
+                if (Marshal.GetLastWin32Error() == ERROR_NOT_ALL_ASSIGNED)
+                {
+                    App.Log("启用关机特权失败: 令牌未持有 SeShutdownPrivilege");
+                    return false;
+                }
+                return true;
+            }
+            finally { if (token != IntPtr.Zero) CloseHandle(token); }
+        }
+
+        public static bool Shutdown()
+        {
+            if (!EnableShutdownPrivilege()) return false;
+            return ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF, 0);
+        }
+        public static bool Restart()
+        {
+            if (!EnableShutdownPrivilege()) return false;
+            return ExitWindowsEx(EWX_REBOOT, 0);
+        }
         public static bool Sleep() => SetSuspendState(false, false, false);
         public static bool Lock() => LockWorkStation();
         public static bool DisplayOff()
         {
             try
             {
-                SendMessage((IntPtr)0xffff, 0x0112, (IntPtr)0xF170, (IntPtr)2);
-                return true;
+                // HWND_BROADCAST 的同步 SendMessage 会被任一挂起窗口卡住 UI 线程,必须用带超时的广播。
+                IntPtr res = SendMessageTimeout((IntPtr)0xffff, 0x0112, (IntPtr)0xF170, (IntPtr)2,
+                    SMTO_ABORTIFHUNG, 2000, out IntPtr _);
+                return res != IntPtr.Zero;
             }
             catch (Exception ex)
             {
@@ -673,7 +752,45 @@ namespace DesktopBar.Interop
                 return false;
             }
         }
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+        private const uint SMTO_ABORTIFHUNG = 0x0002;
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam,
+            uint flags, uint timeout, out IntPtr result);
+
+        // ---------- Authenticode 签名校验(提权执行下载物前的安全闸) ----------
+
+        /// <summary>校验文件 Authenticode 签名可信(系统信任链);校验失败返回 false。
+        /// 经由 PowerShell Get-AuthenticodeSignature(底层同为 WinVerifyTrust):
+        /// 实测直接 P/Invoke WinVerifyTrust 在部分宿主进程内会被干扰返回 TRUST_E_NOSIGNATURE,
+        /// 而该查询在相同环境下结果正确;仅在用户点击安装 PawnIO 时执行一次。
+        /// 路径由本应用生成(随机名/固定安装器名),不含用户可控引号。</summary>
+        public static bool VerifyAuthenticodeSignature(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return false;
+            try
+            {
+                string escaped = filePath.Replace("'", "''");
+                var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                    "-NoProfile -NonInteractive -Command \"(Get-AuthenticodeSignature -LiteralPath '" + escaped + "').Status\"")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                string output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(20000);
+                bool valid = p.ExitCode == 0 && output != null
+                    && output.Trim().Equals("Valid", StringComparison.OrdinalIgnoreCase);
+                if (!valid) App.Log("签名校验未通过: " + output?.Trim());
+                return valid;
+            }
+            catch (Exception ex)
+            {
+                App.Log("签名校验失败: " + ex.Message);
+                return false;
+            }
+        }
     }
 }

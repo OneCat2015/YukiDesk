@@ -11,6 +11,8 @@ namespace DesktopBar.Services
     public static class SettingsService
     {
         private const int CurrentSchemaVersion = 2;
+        /// <summary>本轮启动是否发现过损坏配置(已被隔离);此时不要用默认值自动覆写 settings.json。</summary>
+        public static bool CorruptConfigDetected { get; private set; }
         private static readonly string Dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YukiDesk");
         private static readonly string FilePath = Path.Combine(Dir, "settings.json");
@@ -52,6 +54,7 @@ namespace DesktopBar.Services
             catch (Exception ex)
             {
                 App.Log("读取配置失败 " + path + ": " + ex.Message);
+                CorruptConfigDetected = true;
                 // 保留原始配置以便人工恢复，不把它误判为全新安装再立刻覆盖。
                 try
                 {
@@ -85,15 +88,17 @@ namespace DesktopBar.Services
             s.Folders = s.Folders.Where(IsValidFolderName)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
 
-            if (s.SchemaVersion < CurrentSchemaVersion)
+            if ((s.SchemaVersion ?? 0) < CurrentSchemaVersion)
             {
-                // 旧版只有每模块色彩，迁移一次；之后允许用户明确使用默认色而不被反复覆盖。
-                if (string.IsNullOrWhiteSpace(s.ThemeColor) && s.Folder != null)
-                    s.ThemeColor = s.Folder.BgColor;
-                if (s.ThemeOpacity <= 0 && s.Folder != null && s.Folder.BgOpacity > 0)
-                    s.ThemeOpacity = s.Folder.BgOpacity;
-                if (string.IsNullOrWhiteSpace(s.ThemeTextColor) && s.Folder != null)
-                    s.ThemeTextColor = s.Folder.FontColor;
+                // 旧版只有每模块色彩,迁移一次。注意不能以"ThemeColor 为空"为条件:
+                // 旧 JSON 缺 themeColor 键时,反序列化得到的是属性初始化默认值("#14141C"),
+                // 不是 null——迁移必须无条件用每模块配色覆盖,再固化版本号。
+                if (s.Folder != null)
+                {
+                    s.ThemeColor = NormalizeColor(s.Folder.BgColor, null) ?? s.ThemeColor;
+                    s.ThemeTextColor = NormalizeColor(s.Folder.FontColor, null) ?? s.ThemeTextColor;
+                    s.ThemeOpacity = Clamp(s.Folder.BgOpacity, 0.05, 1, s.ThemeOpacity);
+                }
                 s.SchemaVersion = CurrentSchemaVersion;
             }
 
@@ -151,14 +156,24 @@ namespace DesktopBar.Services
             {
                 s = Normalize(s);
                 Directory.CreateDirectory(Dir);
-                string temp = FilePath + ".tmp";
+                // 随机 tmp 名:并发写或杀软短暂锁定 .tmp 时不会互相踩文件。
+                string temp = FilePath + ".tmp-" + Guid.NewGuid().ToString("N");
                 File.WriteAllText(temp, JsonSerializer.Serialize(s, JsonOptions));
                 if (File.Exists(FilePath))
                     File.Replace(temp, FilePath, BackupFilePath, true);
                 else
                     File.Move(temp, FilePath);
             }
-            catch (Exception ex) { App.Log("保存配置失败: " + ex.Message); }
+            catch (Exception ex)
+            {
+                App.Log("保存配置失败: " + ex.Message);
+                // 磁盘满/ACL 拒绝/杀软锁定时用户以为已保存,重启后回滚——必须可见。
+                try
+                {
+                    DesktopBar.App.ShowConfigSaveFailure(ex);
+                }
+                catch { }
+            }
         }
     }
 }

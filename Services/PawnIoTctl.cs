@@ -30,6 +30,8 @@ namespace DesktopBar.Services
         private static long _probeNotBefore;
         private static bool _logged;
         private static double _lastC = -1;
+        private static int _execFailures;
+        private static int _lastOpenErr = -1;
 
         /// <summary>原生 Tctl 是否已可用(首次成功读取后为真)。</summary>
         public static bool IsAvailable { get; private set; }
@@ -73,7 +75,22 @@ namespace DesktopBar.Services
                     var output = new byte[8];
                     if (!DeviceIoControl(_device, IOCTL_EXECUTE_FN, input, (uint)input.Length,
                             output, (uint)output.Length, out uint read, IntPtr.Zero) || read < 8)
+                    {
+                        // 连续失败说明通道已失效(驱动更新/设备被卸载):关闭句柄、清掉旧值,
+                        // 让降级链(从属共享内存/PMLog SoC)接管;2 秒后重新探测,绝不冻结旧温度。
+                        if (++_execFailures >= 2)
+                        {
+                            if (_device != new IntPtr(-1) && _device != IntPtr.Zero) CloseHandle(_device);
+                            _device = new IntPtr(-1);
+                            _loadFailed = true;
+                            _probeNotBefore = Environment.TickCount64 + 2000;
+                            _lastC = -1;
+                            _execFailures = 0;
+                            App.Log("PawnIO 读取连续失败,已重置通道并回退降级链");
+                        }
                         return _lastC;
+                    }
+                    _execFailures = 0;
                     uint raw = (uint)BitConverter.ToUInt64(output, 0);
                     double t = ((raw >> 21) & 0x7FF) * 0.125;
                     bool adjust = (raw & TempRangeSelMask) != 0 || (raw & TempTjSelMask) == TempTjSelMask;
@@ -115,11 +132,20 @@ namespace DesktopBar.Services
             {
                 _loadFailed = true;
                 _probeNotBefore = now + 30000;
+                // err=2 文件未找到 = 未安装;err=5 = 装了但权限不足(DACL 仅管理员)。
+                // 只在错误码变化时记一条,避免未安装场景每 30 秒刷日志。
+                int err = Marshal.GetLastWin32Error();
+                if (err != _lastOpenErr)
+                {
+                    _lastOpenErr = err;
+                    App.Log("PawnIO 设备打开失败 err=" + err + (err == 2 ? "(未安装)" : err == 5 ? "(权限不足)" : ""));
+                }
                 return false;
             }
             if (!DeviceIoControl(h, IOCTL_LOAD_BINARY, ModuleBinary, (uint)ModuleBinary.Length,
                     null, 0, out _, IntPtr.Zero))
             {
+                App.Log("PawnIO 模块加载失败 err=" + Marshal.GetLastWin32Error());
                 CloseHandle(h);
                 _loadFailed = true;
                 _probeNotBefore = now + 30000;
@@ -127,6 +153,8 @@ namespace DesktopBar.Services
             }
             _device = h;
             _loadFailed = false;
+            _lastOpenErr = 0;
+            _execFailures = 0;
             return true;
         }
 

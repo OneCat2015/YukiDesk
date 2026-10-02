@@ -118,59 +118,76 @@ namespace DesktopBar.Services
                 var cpuTemp = new CpuTempSampler();
                 AdlHost adl = null;
                 NvmlHost nvml = null;
-                while (!token.IsCancellationRequested)
+                long adlRetryNotBefore = 0, nvmlRetryNotBefore = 0;
+                try
                 {
-                    var sample = new PerfSample
+                    while (!token.IsCancellationRequested)
                     {
-                        CpuPercent = cpu.Next(),
-                        NetUpBps = -1,
-                        NetDownBps = -1
-                    };
-                    (sample.MemTotalBytes, sample.MemUsedBytes) = mem.Next();
-                    pdh.Collect();
-                    if (pdh.NetAvailable)
-                        (sample.NetUpBps, sample.NetDownBps) = pdh.ReadNetTotals();
+                        var sample = new PerfSample
+                        {
+                            CpuPercent = cpu.Next(),
+                            NetUpBps = -1,
+                            NetDownBps = -1
+                        };
+                        (sample.MemTotalBytes, sample.MemUsedBytes) = mem.Next();
+                        pdh.Collect();
+                        if (pdh.NetAvailable)
+                            (sample.NetUpBps, sample.NetDownBps) = pdh.ReadNetTotals();
 
-                    if (pdh.CpuPerfAvailable && cpuBaseMhz > 0)
-                    {
-                        double perf = pdh.ReadCpuPerf();
-                        if (perf >= 0) sample.CpuFreqMhz = cpuBaseMhz * perf / 100.0;
+                        if (pdh.CpuPerfAvailable && cpuBaseMhz > 0)
+                        {
+                            double perf = pdh.ReadCpuPerf();
+                            if (perf >= 0) sample.CpuFreqMhz = cpuBaseMhz * perf / 100.0;
+                        }
+                        // CPU 温度链(优先级从高到低):PawnIO 原生 Tctl(本进程直连或高权限从属进程
+                        // 经共享内存发布)> AMD PMLog TEMP_CPU > ACPI 热区 WMI > AMD PMLog SoC。
+                        double pawnTctl = PawnIoTctl.ReadCpuTempC();
+                        if (pawnTctl < 0) pawnTctl = TemperatureSlave.ReadTctl();
+                        double wmiTemp = pawnTctl >= 0 ? -1 : cpuTemp.Next();
+                        sample.MemSpeedMts = WmiReader.ReadMemSpeedMts();
+
+                        sample.Gpus = AdaptersSnapshot();
+                        if (sample.Gpus.Count > 0 && pdh.GpuAvailable)
+                        {
+                            var sums = pdh.ReadGpuSums();
+                            foreach (var gpu in sample.Gpus)
+                                gpu.UtilPercent = sums.TryGetValue(gpu.Luid, out double v)
+                                    ? Math.Min(100.0, v)
+                                    : 0; // 计数器可用但无引擎实例 = 显卡完全空闲
+                        }
+
+                        // GPU 温度/频率遥测:按厂商惰性初始化对应提供方,失败静默降级(面板显示 --)。
+                        // 初始化失败后 60 秒内不重试:每秒 LoadLibrary/ADL_Create 的重试既泄漏句柄又空转。
+                        if (sample.Gpus.Exists(g => g.VendorId == 0x1002)
+                            && adl == null && Environment.TickCount64 >= adlRetryNotBefore)
+                        {
+                            adl = AdlHost.TryCreate();
+                            if (adl == null) adlRetryNotBefore = Environment.TickCount64 + 60000;
+                        }
+                        if (sample.Gpus.Exists(g => g.VendorId == 0x10DE)
+                            && nvml == null && Environment.TickCount64 >= nvmlRetryNotBefore)
+                        {
+                            nvml = NvmlHost.TryCreate();
+                            if (nvml == null) nvmlRetryNotBefore = Environment.TickCount64 + 60000;
+                        }
+                        (double amdCpuTemp, double amdSocTemp) = adl != null ? adl.Poll(sample) : (-1, -1);
+                        nvml?.Poll(sample.Gpus);
+                        if (pawnTctl >= 0) sample.CpuTempC = pawnTctl;
+                        else if (amdCpuTemp >= 0) sample.CpuTempC = amdCpuTemp;
+                        else if (wmiTemp >= 0) sample.CpuTempC = wmiTemp;
+                        else if (amdSocTemp >= 0) sample.CpuTempC = amdSocTemp;
+
+                        _latest = sample;
+                        Updated?.Invoke(sample);
+                        if (token.WaitHandle.WaitOne(1000)) break;
                     }
-                    // CPU 温度链(优先级从高到低):PawnIO 原生 Tctl(本进程直连或高权限从属进程
-                    // 经共享内存发布)> AMD PMLog TEMP_CPU > ACPI 热区 WMI > AMD PMLog SoC。
-                    double pawnTctl = PawnIoTctl.ReadCpuTempC();
-                    if (pawnTctl < 0) pawnTctl = TemperatureSlave.ReadTctl();
-                    double wmiTemp = pawnTctl >= 0 ? -1 : cpuTemp.Next();
-                    sample.MemSpeedMts = WmiReader.ReadMemSpeedMts();
-
-                    sample.Gpus = AdaptersSnapshot();
-                    if (sample.Gpus.Count > 0 && pdh.GpuAvailable)
-                    {
-                        var sums = pdh.ReadGpuSums();
-                        foreach (var gpu in sample.Gpus)
-                            gpu.UtilPercent = sums.TryGetValue(gpu.Luid, out double v)
-                                ? Math.Min(100.0, v)
-                                : 0; // 计数器可用但无引擎实例 = 显卡完全空闲
-                    }
-
-                    // GPU 温度/频率遥测:按厂商惰性初始化对应提供方,失败静默降级(面板显示 --)。
-                    if (sample.Gpus.Exists(g => g.VendorId == 0x1002))
-                        adl ??= AdlHost.TryCreate();
-                    if (sample.Gpus.Exists(g => g.VendorId == 0x10DE))
-                        nvml ??= NvmlHost.TryCreate();
-                    (double amdCpuTemp, double amdSocTemp) = adl != null ? adl.Poll(sample) : (-1, -1);
-                    nvml?.Poll(sample.Gpus);
-                    if (pawnTctl >= 0) sample.CpuTempC = pawnTctl;
-                    else if (amdCpuTemp >= 0) sample.CpuTempC = amdCpuTemp;
-                    else if (wmiTemp >= 0) sample.CpuTempC = wmiTemp;
-                    else if (amdSocTemp >= 0) sample.CpuTempC = amdSocTemp;
-
-                    _latest = sample;
-                    Updated?.Invoke(sample);
-                    if (token.WaitHandle.WaitOne(1000)) break;
                 }
-                adl?.Dispose();
-                nvml?.Dispose();
+                finally
+                {
+                    // 放 finally:异常重启线程的路径同样要释放 ADL/NVML,否则句柄随重启累积。
+                    adl?.Dispose();
+                    nvml?.Dispose();
+                }
             }
             catch (Exception ex)
             {
@@ -634,7 +651,14 @@ namespace DesktopBar.Services
                 try
                 {
                     var host = new AdlHost();
-                    return host.Init() ? host : null;
+                    if (!host.Init())
+                    {
+                        // Init 半途失败时 context 可能已创建,必须 Destroy,否则每次重试泄漏一个。
+                        host.Dispose();
+                        App.Log("ADL 初始化失败(稍后 60 秒重试)");
+                        return null;
+                    }
+                    return host;
                 }
                 catch (Exception ex)
                 {
@@ -769,7 +793,13 @@ namespace DesktopBar.Services
                     if (!NativeLibrary.TryLoad("nvml.dll", out lib) && !NativeLibrary.TryLoad(nvsmi, out lib))
                         return null;
                     var host = new NvmlHost(lib);
-                    if (!host.Init()) return null;
+                    if (!host.Init())
+                    {
+                        // Init 失败同样要 Shutdown(若已 Init)+ Free,否则句柄/上下文随重试累积。
+                        host.Dispose();
+                        App.Log("NVML 初始化失败(稍后 60 秒重试)");
+                        return null;
+                    }
                     return host;
                 }
                 catch (Exception ex)

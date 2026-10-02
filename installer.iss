@@ -62,17 +62,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 #if FLAVOR == "slim"
 [InstallDelete]
-; full -> slim 覆盖升级时只清理 self-contained 的 native .NET runtime 文件。
-Type: files; Name: "{app}\hostfxr.dll"
-Type: files; Name: "{app}\hostpolicy.dll"
-Type: files; Name: "{app}\coreclr.dll"
-Type: files; Name: "{app}\clrjit.dll"
-Type: files; Name: "{app}\ijwhost.dll"
-Type: files; Name: "{app}\createdump.exe"
-Type: files; Name: "{app}\mscordaccore*.dll"
-Type: files; Name: "{app}\mscordbi.dll"
-Type: files; Name: "{app}\vcruntime140_cor3.dll"
-Type: files; Name: "{app}\System.IO.Compression.Native.dll"
+; 升级/换 flavor 前清空整个应用目录:配置在 %AppData%\YukiDesk 不受影响;
+; 此前的手抄 DLL 清单漏了 wpfgfx_cor3.dll 等十几个原生文件和全部托管框架 DLL,
+; full↔slim 交叉升级后残留旧运行时会被优先加载,存在版本错配隐患。
+Type: filesandordirs; Name: "{app}"
+#endif
+
+#if FLAVOR == "full"
+[InstallDelete]
+; full->full 覆盖升级同样先清空,避免旧版本废弃文件随升级无限累积。
+Type: filesandordirs; Name: "{app}"
 #endif
 
 [Files]
@@ -85,6 +84,15 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; 卸载必须回收温度功能留下的持久化痕迹:登录计划任务、自启 Run 键、%TEMP% 下载/脚本残留。
+; PawnIO 驱动本身不在卸载范围,由用户决定是否在系统"应用"中单独卸载(README 有说明)。
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN YukiDeskTctlSlave"; Flags: runhidden; RunOnceId: "DelTempTask"
+Filename: "reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v YukiDesk /f"; Flags: runhidden; RunOnceId: "DelRunKey"
+Filename: "{cmd}"; Parameters: "/D /C if exist ""%TEMP%\PawnIO_setup.exe"" del /f /q ""%TEMP%\PawnIO_setup.exe"""; Flags: runhidden; RunOnceId: "DelPawnSetup"
+Filename: "{cmd}"; Parameters: "/D /C del /f /q ""%TEMP%\yukidesk-*.cmd"" 2>nul"; Flags: runhidden; RunOnceId: "DelTempScripts"
+Filename: "{cmd}"; Parameters: "/D /C if exist ""%TEMP%\YukiDeskUpdate"" rd /s /q ""%TEMP%\YukiDeskUpdate"""; Flags: runhidden; RunOnceId: "DelUpdateCache"
 
 [Code]
 // 扫描 .NET 桌面运行时安装目录，寻找 8.x 版本子目录。

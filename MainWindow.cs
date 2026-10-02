@@ -82,15 +82,36 @@ namespace DesktopBar
             {
                 if (!IsVisible) ClosePanels();
             };
+            // 分辨率/缩放/显示器变化:顶栏宽度只在构造时定过一次,不跟事件就会停留旧值。
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
             Closed += (s, e) =>
             {
                 _closing = true;
                 _layoutVersion++;
                 _pinTimer.Stop();
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
                 DisposeModules();
                 try { _media?.Dispose(); } catch { }
                 _media = null;
             };
+        }
+
+        private void OnDisplaySettingsChanged(object sender, EventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_closing) return;
+                try
+                {
+                    Width = SystemParameters.PrimaryScreenWidth;
+                    PinToDesktopLayer();
+                    var hwnd = new WindowInteropHelper(this).Handle;
+                    if (S.ReserveDesktopSpace) DesktopSpaceService.Apply(S, hwnd);
+                    else DesktopSpaceService.Apply(S);
+                    App.Log("显示设置已变化,顶栏已重新适配");
+                }
+                catch (Exception ex) { App.Log("适配显示设置变化失败: " + ex.Message); }
+            }));
         }
 
         private void PinToDesktopLayer()

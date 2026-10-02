@@ -148,7 +148,13 @@ namespace DesktopBar.UI
             {
                 var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
                 if (hwnd == IntPtr.Zero || w.ActualWidth < 1 || w.ActualHeight < 1) return;
-                NativeMethods.SetRoundRegion(hwnd, (int)Math.Ceiling(w.ActualWidth), (int)Math.Ceiling(w.ActualHeight), (int)(16 * Ui.Scale));
+                // CreateRoundRectRgn 契约是物理像素;ActualWidth/Height 是 DIP,必须按窗口 DPI 换算,
+                // 否则高缩放下区域比窗口小,展开页右侧/下方被裁掉。
+                var dpi = VisualTreeHelper.GetDpi(w);
+                NativeMethods.SetRoundRegion(hwnd,
+                    (int)Math.Ceiling(w.ActualWidth * dpi.DpiScaleX),
+                    (int)Math.Ceiling(w.ActualHeight * dpi.DpiScaleY),
+                    (int)Math.Ceiling(16 * Ui.Scale * dpi.DpiScaleX));
             }
             catch { }
         }
@@ -209,7 +215,12 @@ namespace DesktopBar.UI
             OnPanelShown();
 
             double gap = 8 * Ui.Scale;
-            var p = Pill.PointToScreen(new Point(0, Pill.ActualHeight + gap));
+            // PointToScreen 返回物理像素,而 PanelWindow.Left/Top 与 WorkArea 都是 DIP:
+            // 先按本胶囊的 DPI 换算回 DIP,后面所有几何计算统一在 DIP 域进行,
+            // 否则高缩放下展开页错位约 (scale-1)*100%,贴边 clamp 与上下翻转判断也全部失真。
+            var dpi = VisualTreeHelper.GetDpi(Pill);
+            var screenPt = Pill.PointToScreen(new Point(0, Pill.ActualHeight + gap));
+            var p = new Point(screenPt.X / dpi.DpiScaleX, screenPt.Y / dpi.DpiScaleY);
             Panel.Visibility = Visibility.Visible;
             Panel.Measure(new Size(SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight));
             double width = Math.Max(1, Panel.DesiredSize.Width);
@@ -338,14 +349,16 @@ namespace DesktopBar.UI
 
         protected TextBlock MakePanelTitle(string text)
         {
-            return new TextBlock
+            // 登记进 _texts 随主题刷新,否则面板标题在主题切换后保留旧色(delta=1 → 14px)。
+            var t = new TextBlock
             {
                 Text = text,
-                FontSize = 14 * Ui.Scale,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = Ui.Brush(ThemeService.Text),
                 Margin = new Thickness(2, 0, 2, 8)
             };
+            _texts.Add((t, 1));
+            ApplyFont(t, 1);
+            return t;
         }
 
         protected FrameworkElement CenterIcon(FrameworkElement icon)

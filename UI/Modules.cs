@@ -120,6 +120,12 @@ namespace DesktopBar.UI
             _pFest.FontSize = Math.Max(9, 12 * Ui.Scale);
             body.Children.Add(_pTime); body.Children.Add(_pWeek); body.Children.Add(_pDate); body.Children.Add(_pLunar); body.Children.Add(_pFest); Panel.Child = body;
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) }; _timer.Tick += (s, e) => Refresh(); _timer.Start(); Refresh();
+            // 模块隐藏(或整条顶栏隐藏)时停表,不再空转刷新 5 个 TextBlock。
+            IsVisibleChanged += (s, e) =>
+            {
+                if (IsVisible) { Refresh(); _timer.Start(); }
+                else _timer.Stop();
+            };
         }
         protected override bool CenterPanelOnPill => true;
         private void Refresh()
@@ -261,6 +267,9 @@ namespace DesktopBar.UI
         private readonly TextBlock _value;
         private readonly Slider _slider;
         private DispatcherTimer _poll;
+        private DispatcherTimer _writeTimer;
+        private float? _pendingVolume;
+        private DateTime _lastUserAdjustUtc;
         private bool _syncing;
         private bool _muted;
         private bool _volumeAvailable;
@@ -296,19 +305,40 @@ namespace DesktopBar.UI
             _slider.IsEnabled = initialVolumeAvailable;
             _value.HorizontalAlignment = HorizontalAlignment.Center;
             Panel.Child = body;
+            // 写音量经 120ms 合并:一次拖动只落一次系统写,不逐刻度跨进程写。
+            _writeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+            _writeTimer.Tick += (s, e) =>
+            {
+                _writeTimer.Stop();
+                if (_pendingVolume.HasValue && _volumeAvailable && _volumeWritesEnabled && IsLoaded)
+                {
+                    _volume.SyncDefaultIfChanged();
+                    _volume.SetVolume(_pendingVolume.Value);
+                }
+                _pendingVolume = null;
+            };
             _slider.ValueChanged += (s, e) =>
             {
                 _value.Text = Math.Round(e.NewValue * 100) + "%";
                 UpdateIcon(e.NewValue, _muted);
                 if (!_syncing && _volumeAvailable && _volumeWritesEnabled && IsLoaded)
-                    _volume.SetVolume((float)e.NewValue);
+                {
+                    _pendingVolume = (float)e.NewValue;
+                    _lastUserAdjustUtc = DateTime.UtcNow;
+                    _writeTimer.Stop();
+                    _writeTimer.Start();
+                }
             };
             Pill.MouseLeftButtonUp += (s, e) =>
             {
                 _volumeWritesEnabled = true;
                 _muted = !_muted;
                 if (_volumeAvailable && _volumeWritesEnabled && IsLoaded)
+                {
+                    // 静音写入前先跟随默认设备,否则设备切换后 800ms 内会把静音写到旧端点。
+                    _volume.SyncDefaultIfChanged();
                     _volume.SetMute(_muted);
+                }
                 UpdateIcon(_slider.Value, _muted);
             };
             UpdateIcon(initialVolume, _muted);
@@ -319,6 +349,8 @@ namespace DesktopBar.UI
             _poll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
             _poll.Tick += (s, e) =>
             {
+                // 每个轮询周期都跟随默认设备;只在面板打开时轮询,一条 COM 查询开销可忽略。
+                _volume.SyncDefaultIfChanged();
                 float? current = _volume.GetVolume();
                 bool? muted = _volume.GetMute();
                 if (current.HasValue)
@@ -326,7 +358,9 @@ namespace DesktopBar.UI
                     _volumeAvailable = true;
                     _slider.IsEnabled = true;
                     UpdateIcon(current.Value, muted ?? _muted);
-                    SyncControls(current.Value);
+                    // 用户正在调整(1.2 秒内)时不要把滑块拽回设备值,避免拖动中跳变。
+                    if ((DateTime.UtcNow - _lastUserAdjustUtc).TotalMilliseconds > 1200)
+                        SyncControls(current.Value);
                 }
                 else
                 {
@@ -381,12 +415,17 @@ namespace DesktopBar.UI
             _speakerWave1.Opacity = muted || volume < 0.01 ? 0 : 1;
             _speakerWave2.Opacity = muted || volume < 0.34 ? 0 : 1;
         }
-        private void Adjust(int delta) { _slider.Value = Math.Max(0, Math.Min(1, _slider.Value + (delta > 0 ? 0.04 : -0.04))); }
+        private void Adjust(int delta)
+        {
+            _lastUserAdjustUtc = DateTime.UtcNow;
+            _slider.Value = Math.Max(0, Math.Min(1, _slider.Value + (delta > 0 ? 0.04 : -0.04)));
+        }
         public override void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
             _poll.Stop();
+            _writeTimer?.Stop();
             _volume.Dispose();
             base.Dispose();
         }
@@ -501,9 +540,24 @@ namespace DesktopBar.UI
                         (completed, name, placed) => progress.Report(completed, name, placed));
                 }));
             if (!_disposed) LoadFiles();
-            if (!result.Started) return;
+            if (!result.Started)
+            {
+                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                return;
+            }
+            if (result.Error != null)
+            {
+                ConfirmDialog.Notice("移动未完成",
+                    "操作被中断：" + result.Error.Message + "\n部分项目可能已移动，请检查目标文件夹。");
+                return;
+            }
             int succeeded = paste?.Succeeded ?? result.Succeeded;
             int total = paste?.Total ?? snapshot.Paths.Count;
+            // 剪切语义已完整消费:清掉剪贴板,符合资源管理器惯例,避免"再粘贴"静默无效。
+            if (snapshot.Move && paste != null && paste.Total > 0 && paste.Succeeded == paste.Total)
+            {
+                try { Clipboard.Clear(); } catch { }
+            }
             if (succeeded < total)
             {
                 var failed = paste?.FailedItems ?? Array.Empty<string>();
@@ -517,6 +571,13 @@ namespace DesktopBar.UI
         protected override void OnPanelShown()
         {
             if (_filesDirty) LoadFiles();
+        }
+
+        protected override void OnPanelHidden()
+        {
+            // 面板已收起,悬停打开计时器必须作废,否则文件会在面板消失后"莫名"打开。
+            foreach (var timer in _itemOpenTimers) timer.Stop();
+            _itemOpenTimers.Clear();
         }
 
         private async void LoadFiles()
@@ -722,7 +783,7 @@ namespace DesktopBar.UI
                         openTimer.Stop();
                         _itemOpenTimers.Remove(openTimer);
                         openTimer = null;
-                        if (!_disposed) ShellOpen.OpenPath(f.FullName);
+                        if (!_disposed && Open) ShellOpen.OpenPath(f.FullName);
                     };
                     openTimer.Start();
                 }
@@ -899,6 +960,12 @@ namespace DesktopBar.UI
                     });
                 if (!_disposed) LoadFiles();
                 if (result.SucceededFully) return true;
+                if (result.Error != null)
+                {
+                    ConfirmDialog.Notice("移动被中断",
+                        "操作中途发生异常：" + result.Error.Message + "\n部分项目可能已移动，请检查目标文件夹。");
+                    return false;
+                }
                 if (result.Started && failures.Count > 0)
                     ConfirmDialog.Notice("移动未全部完成",
                         "已完成 " + result.Succeeded + "/" + requests.Count + " 项。\n\n"
@@ -938,8 +1005,7 @@ namespace DesktopBar.UI
         {
             Pill.Width = 38 * Ui.Scale;
             Pill.Padding = new Thickness(0);
-            Pill.ToolTip = "回收站 — 单击展开，双击在资源管理器打开，右键清空";
-            Pill.Child = CenterIcon(MakeTrashGlyph(20.5));
+            Pill.ToolTip = "回收站 — 单击展开，双击在资源管理器打开，右键清空";            Pill.Child = CenterIcon(MakeTrashGlyph(20.5));
             Pill.MouseLeftButtonUp += (s, e) => ShowPanel();
             Pill.MouseRightButtonUp += (s, e) => { ShowClearMenu(); e.Handled = true; };
             // 双击胶囊:直接打开回收站视图(SHOpenFolderAndSelectItems 会打开"父文件夹"即桌面,
@@ -951,15 +1017,13 @@ namespace DesktopBar.UI
                 NativeMethods.ShellExecuteOpen("shell:::{645FF040-5081-101B-9F08-00AA002F954E}");
             };
 
-            _emptyHint = new TextBlock
-            {
-                Text = "回收站是空的",
-                FontSize = 12 * Ui.Scale,
-                Foreground = Ui.Brush(ThemeService.Text, 0.65),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(12 * Ui.Scale, 16 * Ui.Scale, 12 * Ui.Scale, 10 * Ui.Scale),
-                Visibility = Visibility.Collapsed
-            };
+            // 经 MakeText 登记随主题刷新;直接快照 Foreground 会在切主题后保留旧色。
+            _emptyHint = MakeText("回收站是空的", -1);
+            _emptyHint.FontSize = 12 * Ui.Scale;
+            _emptyHint.Opacity = 0.65;
+            _emptyHint.HorizontalAlignment = HorizontalAlignment.Center;
+            _emptyHint.Margin = new Thickness(12 * Ui.Scale, 16 * Ui.Scale, 12 * Ui.Scale, 10 * Ui.Scale);
+            _emptyHint.Visibility = Visibility.Collapsed;
             _wrap.HorizontalAlignment = HorizontalAlignment.Center;
             var host = new StackPanel();
             host.Children.Add(_emptyHint);
@@ -986,16 +1050,23 @@ namespace DesktopBar.UI
             {
                 el.DragOver += (s, e) =>
                 {
-                    e.Effects = !OperationProgressDialog.Busy && e.Data.GetDataPresent(DataFormats.FileDrop)
+                    // 与小文件夹拖入同一约定:来源只允许 Copy 时不能假装 Move(拖入回收站是删除性移动),
+                    // 否则 zip/邮件附件等 Copy-only 源会被错误删除。
+                    e.Effects = !OperationProgressDialog.Busy
+                        && e.Data.GetDataPresent(DataFormats.FileDrop)
+                        && (e.AllowedEffects & DragDropEffects.Move) != 0
                         ? DragDropEffects.Move : DragDropEffects.None;
                     e.Handled = true;
                 };
                 el.Drop += (s, e) =>
                 {
                     bool moved = false;
-                    if (e.Data.GetDataPresent(DataFormats.FileDrop) && !OperationProgressDialog.Busy)
+                    if (e.Data.GetDataPresent(DataFormats.FileDrop) && !OperationProgressDialog.Busy
+                        && (e.AllowedEffects & DragDropEffects.Move) != 0)
                     {
                         var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                        // 忽略本模块拖出又拖回的临时硬链接/副本,避免把回收站内部路径再次回收。
+                        files = FilterOwnTempPaths(files);
                         if (files != null && files.Length > 0)
                         {
                             bool success = false;
@@ -1012,14 +1083,35 @@ namespace DesktopBar.UI
                             {
                                 LoadItems();
                                 if (!moved)
-                                    ConfirmDialog.Notice("移入回收站失败", "无法把拖入的项目全部移入回收站。");
+                                    ConfirmDialog.Notice("移入回收站未全部完成", "部分项目未能移入回收站,请重试或逐个检查。");
                             }
+                            else
+                                ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
                         }
                     }
                     e.Effects = moved ? DragDropEffects.Move : DragDropEffects.None;
                     e.Handled = true;
                 };
             }
+        }
+
+        /// <summary>过滤来自本模块拖出的临时路径(回收站 $R 目录内的硬链接、%TEMP% 临时副本)。</summary>
+        private static string[] FilterOwnTempPaths(string[] files)
+        {
+            if (files == null) return files;
+            string tempRoot = (FilePath.GetTempPath() ?? "").TrimEnd('\\', '/');
+            var kept = files.Where(f =>
+            {
+                if (string.IsNullOrEmpty(f)) return false;
+                string full = f;
+                try { full = FilePath.GetFullPath(f); } catch { }
+                if (full.IndexOf("\\$Recycle.Bin\\", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (!string.IsNullOrEmpty(tempRoot)
+                    && full.StartsWith(tempRoot + "\\", StringComparison.OrdinalIgnoreCase)
+                    && full.IndexOf("YukiDeskClipboard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                return true;
+            }).ToArray();
+            return kept;
         }
 
         private async void LoadItems()
@@ -1092,7 +1184,9 @@ namespace DesktopBar.UI
                 Background = Brushes.Transparent,
                 Child = sp,
                 Cursor = Cursors.Hand,
-                ToolTip = item.OriginalPath + "\n删除于 " + item.DeletedAt.ToString("yyyy-MM-dd HH:mm") + " · 单击还原",
+                ToolTip = item.OriginalPath + "\n删除于 " + item.DeletedAt.ToString("yyyy-MM-dd HH:mm")
+                    + (item.Size >= 0 ? "\n大小 " + FmtRecycleSize(item.Size) : "")
+                    + "\n双击还原;右键更多操作",
                 RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = new ScaleTransform(1, 1)
             };
@@ -1168,16 +1262,45 @@ namespace DesktopBar.UI
                 }
                 var data = new DataObject(DataFormats.FileDrop, new[] { dragPath });
                 data.SetData("Preferred DropEffect", FileClipboard.EffectStream(FileClipboard.MoveEffect));
-                var effect = DragDrop.DoDragDrop(border, data, DragDropEffects.Move);
+                DragDropEffects effect = DragDropEffects.None;
                 try
                 {
-                    if (!string.IsNullOrEmpty(tempLink))
-                    {
-                        if (Directory.Exists(tempLink)) Directory.Delete(tempLink, true);
-                        else if (File.Exists(tempLink)) File.Delete(tempLink);
-                    }
+                    effect = DragDrop.DoDragDrop(border, data, DragDropEffects.Move);
                 }
-                catch (Exception ex) { App.Log("清理回收站拖拽临时项目失败: " + ex.Message); }
+                catch (Exception ex)
+                {
+                    App.Log("回收站拖出失败: " + ex.Message);
+                }
+                finally
+                {
+                    dragStart = null;
+                }
+                // 关键守卫:目标声称接受 Move 且临时项确实已从原处消失(被目标 rename/移走),
+                // 才允许删除 $R/$I。临时项仍在原处说明落点只是"口头接受"没取走数据,
+                // 此时删 $R 会造成内容永久丢失(目录分支的临时副本是拷贝,不是硬链接)。
+                bool linkStillThere = !string.IsNullOrEmpty(tempLink)
+                    && (Directory.Exists(tempLink) || File.Exists(tempLink));
+                if (!string.IsNullOrEmpty(tempLink))
+                {
+                    // 大目录临时副本可能 GB 级,同步删会冻结 UI,放后台清理。
+                    string cleanup = tempLink;
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            if (Directory.Exists(cleanup)) Directory.Delete(cleanup, true);
+                            else if (File.Exists(cleanup)) File.Delete(cleanup);
+                        }
+                        catch (Exception ex) { App.Log("清理回收站拖拽临时项目失败: " + ex.Message); }
+                    });
+                }
+                if ((effect & DragDropEffects.Move) != 0 && linkStillThere)
+                {
+                    // 落点接受了 Drop 却没真正移走内容:保留 $R/$I,项目还在回收站,用户可重试。
+                    App.Log("拖出目标未实际取走内容,保留回收站项目: " + item.Name);
+                    LoadItems();
+                    return;
+                }
                 if ((effect & DragDropEffects.Move) != 0)
                 {
                     // 只有 $R 内容和 $I 元数据都清理成功，才算完成拖出；否则保留元数据以便还原。
@@ -1188,8 +1311,7 @@ namespace DesktopBar.UI
                         {
                             try
                             {
-                                if (item.IsDirectory) Directory.Delete(item.DataPath, true);
-                                else File.Delete(item.DataPath);
+                                FileClipboard.ForceDelete(item.DataPath);
                                 dataDeleted = true;
                             }
                             catch (Exception ex) { App.Log("移出回收站内容失败: " + ex.Message); }
@@ -1205,18 +1327,28 @@ namespace DesktopBar.UI
                             progress.Report(1, item.Name, dataDeleted && metaDeleted);
                             return Task.CompletedTask;
                         });
-                    if (result.Started && dataDeleted && metaDeleted) LoadItems();
-                    else if (result.Started)
-                        ConfirmDialog.Notice("移出回收站失败", "“" + item.Name + "”未能完整移出，原项目仍保留在回收站中。");
+                    if (!result.Started)
+                        ConfirmDialog.Notice("操作进行中", "已有文件操作正在进行，请稍后再试。");
+                    else if (dataDeleted && metaDeleted) LoadItems();
+                    else if (dataDeleted)
+                    {
+                        // 内容已删但元数据没删掉:条目将变成孤儿 $I,提示要如实反映"内容已移出"。
+                        ConfirmDialog.Notice("移出完成但元数据清理失败",
+                            "“" + item.Name + "”的内容已移到目标位置,但回收站记录清理失败。\n"
+                            + "该条目可能继续显示在回收站列表中,可忽略或稍后在资源管理器中清理。");
+                        LoadItems();
+                    }
+                    else
+                        ConfirmDialog.Notice("移出回收站失败", "“" + item.Name + "”未能移出，原项目仍保留在回收站中。");
                 }
-                dragStart = null;
             };
             border.MouseLeftButtonUp += (s, e) =>
             {
                 AnimateItemBack(transform);
                 border.SetResourceReference(Border.BackgroundProperty, "ThemePanelControl");
                 if (dragTaken) { dragTaken = false; e.Handled = true; return; }
-                RestoreItemAsync(item);
+                // 还原改为双击触发:单击只是选中/查看,避免误触 68px 小条目就移动文件。
+                if (e.ClickCount >= 2) RestoreItemAsync(item);
                 e.Handled = true;
             };
             border.MouseRightButtonUp += (s, e) => { ShowItemMenu(item); e.Handled = true; };
@@ -1339,6 +1471,15 @@ namespace DesktopBar.UI
                 new DoubleAnimation(1, TimeSpan.FromMilliseconds(150)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.08 } });
         }
 
+        private static string FmtRecycleSize(long bytes)
+        {
+            if (bytes < 0) return "";
+            if (bytes >= 1073741824) return (bytes / 1073741824.0).ToString("0.0") + " GB";
+            if (bytes >= 1048576) return (bytes / 1048576.0).ToString("0.0") + " MB";
+            if (bytes >= 1024) return (bytes / 1024.0).ToString("0.0") + " KB";
+            return bytes + " B";
+        }
+
         // ---------- 右键菜单：清空回收站 ----------
 
         private void ShowClearMenu()
@@ -1368,7 +1509,8 @@ namespace DesktopBar.UI
             }
             App.Log("清空回收站 hr=0x" + hr.ToString("X8"));
             if (!_disposed) LoadItems();
-            if (hr != 0)
+            // 空桶调用 SHEmptyRecycleBin 常返回 E_UNEXPECTED,实际无事发生,不能当失败吓用户。
+            if (hr != 0 && hr != NativeMethods.E_UNEXPECTED)
                 ConfirmDialog.Notice("清空回收站失败", "Windows 未能完成清空操作。\n错误代码: 0x" + hr.ToString("X8"));
         }
 
@@ -1458,7 +1600,13 @@ namespace DesktopBar.UI
                 {
                     icon = NativeMethods.GetFileIcon(request.Path, request.IsDirectory, request.PixelSize)
                         ?? GetFallback(request.IsDirectory, FilePath.GetExtension(request.Path));
-                    lock (Gate) Cache[request.Key] = icon;
+                    lock (Gate)
+                    {
+                        // 简单容量上限:长会话浏览海量文件/改缩放会让"路径|尺寸"键只增不减,
+                        // 超限整体清空,图标按需重建(重建成本低,远好于无界增长)。
+                        if (Cache.Count >= 512) Cache.Clear();
+                        Cache[request.Key] = icon;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -2040,8 +2188,16 @@ namespace DesktopBar.UI
         public override void Dispose()
         {
             if (_disposed) return;
+            // 不经由 SetActive(false) 退订:SetActive 的 _disposed 守卫会把它短路,
+            // 导致采样线程永不停止、委托持模块。这里直接退订并释放引用。
+            var service = PerfService.Instance;
+            if (_active)
+            {
+                _active = false;
+                service.Updated -= OnSample;
+                service.ReleaseRef();
+            }
             _disposed = true;
-            SetActive(false);
             base.Dispose();
         }
     }

@@ -15,6 +15,11 @@ namespace DesktopBar.Services
         private static UserPreferenceChangedEventHandler _preferenceChanged;
         private static string _background = "#14141C";
         private static string _text = "#FFFFFF";
+        // 壁纸亮度缓存与后台计算:解码整张壁纸并采样是重活,不能在 UI 线程同步做,
+        // 否则换壁纸/改系统主题色瞬间顶栏卡顿(4K 壁纸可达数百毫秒)。
+        private static volatile bool _wallpaperBright;
+        private static long _wallpaperComputedAt = -1;
+        private static int _wallpaperComputing;
 
         public static string Background => _background;
         public static string Text => _text;
@@ -62,7 +67,8 @@ namespace DesktopBar.Services
             }
             else
             {
-                bool bright = WallpaperIsBright();
+                EnsureWallpaperBrightness();
+                bool bright = _wallpaperBright;
                 _background = bright ? "#111118" : "#F6F7FB";
                 _text = bright ? "#FFFFFF" : "#171821";
             }
@@ -80,10 +86,50 @@ namespace DesktopBar.Services
                 resources["ThemePanelSelected"] = Ui.Brush(_text, 0.20);
                 resources["ThemePanelText"] = Ui.Brush(_text, 1);
             }
+            // 颜色没变时不广播:避免 UserPreferenceChanged(改音量方案/其他偏好)反复全量重建模块画刷。
+            if (string.Equals(_background, lastBackground, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_text, lastText, StringComparison.OrdinalIgnoreCase)
+                && !firstCompute) return;
+            lastBackground = _background;
+            lastText = _text;
             Changed?.Invoke();
         }
 
-        private static bool WallpaperIsBright()
+        private static string lastBackground;
+        private static string lastText;
+        private static bool firstCompute = true;
+
+        /// <summary>取缓存的壁纸亮度;缓存缺失或过期(10 分钟)时在后台线程重算,先返回旧值。</summary>
+        private static void EnsureWallpaperBrightness()
+        {
+            long now = Environment.TickCount64;
+            if (_wallpaperComputedAt >= 0 && now - _wallpaperComputedAt < 600000) return;
+            if (System.Threading.Interlocked.CompareExchange(ref _wallpaperComputing, 1, 0) != 0) return;
+            bool first = _wallpaperComputedAt < 0;
+            if (first)
+            {
+                // 首次没有旧值可用,同步算一次(启动路径,仅一次);仍比每条偏好变化都算好。
+                _wallpaperBright = ComputeWallpaperBrightness();
+                _wallpaperComputedAt = now;
+                _wallpaperComputing = 0;
+                return;
+            }
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    bool bright = ComputeWallpaperBrightness();
+                    bool changed = bright != _wallpaperBright;
+                    _wallpaperBright = bright;
+                    _wallpaperComputedAt = Environment.TickCount64;
+                    if (changed) Refresh(); // 亮度结论变了才再刷一次
+                }
+                catch { }
+                finally { _wallpaperComputing = 0; }
+            });
+        }
+
+        private static bool ComputeWallpaperBrightness()
         {
             try
             {

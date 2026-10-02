@@ -10,6 +10,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Data;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using DesktopBar.Interop;
 using DesktopBar.Models;
@@ -40,7 +41,12 @@ namespace DesktopBar
             ShowPage("Appearance");
             ThemeService.Changed += OnThemeChanged;
             ApplyWindowTheme();
-            Closed += (s, e) => ThemeService.Changed -= OnThemeChanged;
+            Closed += (s, e) =>
+            {
+                ThemeService.Changed -= OnThemeChanged;
+                _tempStatusTimer?.Stop();
+                _tempStatusTimer = null;
+            };
         }
 
         // ---------- 导航 ----------
@@ -284,21 +290,37 @@ namespace DesktopBar
             var g = new Grid();
             g.Children.Add(s);
             g.Children.Add(t);
-            // 拖动中只刷新数字标签;回调可能触发顶栏全量重建(如改缩放/主题),
-            // 若在 ValueChanged 里实时执行会每帧重建可视树,表现为滑块卡死拖不动。
-            // 统一改为松手后提交一次。
+            // 提交策略:回调可能触发顶栏全量重建(如改缩放/主题),不能在 ValueChanged 里实时执行,
+            // 否则拖动时每帧重建可视树会卡死。改为 250ms 防抖提交:拖动/点轨道/方向键/PageUp
+            // 改值全部覆盖,停手后提交一次;Thumb.DragCompleted 再立即提交,保证松手即生效。
             s.ValueChanged += (o, e) => t.Text = Math.Round(e.NewValue) + suffix;
+            DispatcherTimer debounce = null;
+            void ScheduleCommit()
+            {
+                if (debounce == null)
+                {
+                    debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                    debounce.Tick += (o2, e2) =>
+                    {
+                        debounce.Stop();
+                        changed(Math.Round(s.Value));
+                    };
+                }
+                debounce.Stop();
+                debounce.Start();
+            }
+            s.ValueChanged += (o, e) => ScheduleCommit();
             // 模板在样式应用后才实例化,Loaded 时 Thumb 才能被找到。
             s.Loaded += (o, e) =>
             {
                 var thumb = s.Template?.FindName("thumb", s) as Thumb;
-                if (thumb != null) thumb.DragCompleted += (o2, e2) => changed(Math.Round(s.Value));
-                else s.ValueChanged += (o2, e2) => changed(Math.Round(e2.NewValue));
+                if (thumb != null)
+                    thumb.DragCompleted += (o2, e2) => { debounce?.Stop(); changed(Math.Round(s.Value)); };
             };
             return g;
         }
 
-        private FrameworkElement ToggleRow(string label, bool val, Action<bool> changed)
+        private FrameworkElement ToggleRow(string label, bool val, Action<bool> changed, Action<ToggleButton> onCreated = null)
         {
             var t = new ToggleButton
             {
@@ -307,6 +329,7 @@ namespace DesktopBar
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            onCreated?.Invoke(t);
             t.Click += (s, e) => changed(t.IsChecked == true);
             return Row(label, t);
         }
@@ -355,7 +378,8 @@ namespace DesktopBar
             body.Children.Add(Row("主题色盘", NewColorEditor(S.ThemeColor, h => { S.ThemeColor = h; S.AutoTheme = false; ThemeService.Refresh(); Save(); })));
             // 顶栏文字与矢量图标的颜色；手动指定后关闭壁纸明暗自动适配，避免自动黑白文字覆盖自定义色。
             body.Children.Add(Row("文字与图标颜色", NewColorEditor(S.ThemeTextColor, h => { S.ThemeTextColor = h; S.AutoTheme = false; ThemeService.Refresh(); Save(); })));
-            body.Children.Add(Row("透明度", NumberSlider(0, 100, S.ThemeOpacity * 100, "%", v => { S.ThemeOpacity = Math.Round(v) / 100; ThemeService.Refresh(); Save(); })));
+            // 透明度允许域是 0.05..1(Normalize 钳制),滑块下限对齐 5%,避免显示 0% 实际 5% 的偏差。
+            body.Children.Add(Row("透明度", NumberSlider(5, 100, S.ThemeOpacity * 100, "%", v => { S.ThemeOpacity = Math.Max(0.05, Math.Round(v) / 100); ThemeService.Refresh(); Save(); })));
             body.Children.Add(Row("缩放", NumberSlider(75, 150, S.Scale * 100, "%", v => { S.Scale = Math.Round(v) / 100; Save(); })));
             body.Children.Add(ToggleRow("自动适配壁纸明暗", S.AutoTheme, v => { S.AutoTheme = v; ThemeService.Refresh(); Save(); }));
             body.Children.Add(Row("设置窗口主题", BuildThemeModePicker()));
@@ -481,15 +505,28 @@ namespace DesktopBar
             browse.Click += (s, e) =>
             {
                 var dlg = new OpenFolderDialog { Title = "选择存储根目录" };
-                if (dlg.ShowDialog() == true)
+                if (dlg.ShowDialog() != true) return;
+                string newRoot = dlg.FolderName;
+                try
                 {
-                    S.StorageRoot = dlg.FolderName;
-                    pathBox.Text = S.StorageRoot;
-                    SyncFoldersFromDisk();
-                    Save();
-                    RefreshFolderList();
-                    App.Bar?.ApplySettings();
+                    if (string.Equals(Path.GetFullPath(newRoot), Path.GetFullPath(S.StorageRoot), StringComparison.OrdinalIgnoreCase)) return;
                 }
+                catch { return; }
+                // 换目录会把新目录下所有子文件夹吞进顶栏:误选用户目录/系统目录会瞬间生成一堆
+                // 选项卡且立即持久化,原目录内容不会迁移。必须让用户确认后再执行。
+                int subCount = 0;
+                try { subCount = Directory.GetDirectories(newRoot).Count(n => IsValidFolderName(Path.GetFileName(n))); } catch { }
+                if (!ConfirmDialog.Show("更换存储路径",
+                    "将把存储路径切换为:\n" + newRoot
+                    + "\n\n新目录下的 " + subCount + " 个子文件夹会自动加入顶栏;原目录中的文件不会被移动或删除,顶栏此后指向新位置。确定继续吗?",
+                    "更换", okIsDefault: false))
+                    return;
+                S.StorageRoot = newRoot;
+                pathBox.Text = S.StorageRoot;
+                SyncFoldersFromDisk();
+                Save();
+                RefreshFolderList();
+                App.Bar?.ApplySettings();
             };
             var pgrid = new Grid();
             pgrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -567,7 +604,9 @@ namespace DesktopBar
                         ConfirmDialog.Notice("重命名失败", "原文件夹不存在，未修改配置。");
                         return;
                     }
-                    if (Directory.Exists(newDir))
+                    // 仅大小写变化(abc→ABC)时 Windows 的 Exists 判断会误报"已存在",放行走 Move。
+                    bool caseOnly = string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase);
+                    if (!caseOnly && Directory.Exists(newDir))
                     {
                         ConfirmDialog.Notice("重命名失败", "目标文件夹已存在。");
                         return;
@@ -621,7 +660,10 @@ namespace DesktopBar
                             return;
                         }
                     }
-                    S.Folders.RemoveAt(idx);
+                    // await 期间用户可能已拖动排序或改名,按名称重新定位,不能信 await 前的旧索引。
+                    int cur = S.Folders.FindIndex(f => string.Equals(f, sel, StringComparison.OrdinalIgnoreCase));
+                    if (cur < 0) { RefreshFolderList(); return; }
+                    S.Folders.RemoveAt(cur);
                     Save();
                     RefreshFolderList();
                     App.Bar?.ApplySettings();
@@ -915,14 +957,25 @@ namespace DesktopBar
                     Margin = new Thickness(10, 0, 0, 0)
                 };
                 _nativeTempButton.Click += (s, e) => InstallPawnIO();
+                _nativeTempDisableButton = new Button
+                {
+                    Content = "停用",
+                    Style = (Style)FindResource("Btn"),
+                    Margin = new Thickness(10, 0, 0, 0),
+                    ToolTip = "删除登录温度任务并停用原生温度;PawnIO 本身可在系统\"应用\"里单独卸载"
+                };
+                _nativeTempDisableButton.Click += (s, e) => DisableNativeTemp();
                 var nativeHost = new StackPanel { Orientation = Orientation.Horizontal };
                 nativeHost.Children.Add(_nativeTempStatus);
                 nativeHost.Children.Add(_nativeTempButton);
+                nativeHost.Children.Add(_nativeTempDisableButton);
                 body.Children.Add(Row("原生 CPU 温度", nativeHost));
                 body.Children.Add(MakeHint("开启后 CPU 胶囊温度显示处理器原生 Tctl 核心温度(与 AIDA64/HWiNFO 同源)。"
                     + "PawnIO 设备仅管理员可访问,因此启用时会创建一个登录时以最高权限静默启动的温度从属任务"
                     + "(隐藏进程,读取后经共享内存交给主程序,主程序退出时自动结束);首次启用只需一次管理员授权。"
                     + "未启用时显示 CPU 封装内 SoC 温度(满载时比 Tctl 略低)。"));
+                System.Threading.Tasks.Task.Run(ProbeSlaveTask);
+                EnsureTempStatusTimer();
                 RefreshNativeTempStatus();
             }
 
@@ -938,17 +991,148 @@ namespace DesktopBar
         private int _gpuLoadVersion;
         private TextBlock _nativeTempStatus;
         private Button _nativeTempButton;
+        private Button _nativeTempDisableButton;
+        private DispatcherTimer _tempStatusTimer;
+        private long _lastTaskProbeTick = -60000;
+        private bool _lastTaskExists;
+        private bool _lastTaskPathOk = true;
         private bool _pawnInstalling;
 
         private void RefreshNativeTempStatus(string note = null)
         {
             if (_nativeTempStatus == null) return;
             bool avail = DesktopBar.Services.PawnIoTctl.IsAvailable || DesktopBar.Services.TemperatureSlave.IsFresh;
-            _nativeTempStatus.Text = avail ? "已启用(Tctl)" : (note ?? "未启用");
+            string text;
+            if (avail) text = "已启用(Tctl)";
+            else if (note != null) text = note;
+            else if (_lastTaskExists && !_lastTaskPathOk)
+                text = "登录任务指向旧路径,点击\"启用原生温度…\"重建";
+            else if (_lastTaskExists && !TemperatureSlaveFresh())
+                text = "登录任务存在,但从属进程未提供数据";
+            else text = "未启用";
+            _nativeTempStatus.Text = text;
+            if (_nativeTempDisableButton != null && !_pawnInstalling)
+                _nativeTempDisableButton.Visibility = _lastTaskExists ? Visibility.Visible : Visibility.Collapsed;
             if (_nativeTempButton != null && !_pawnInstalling)
             {
                 _nativeTempButton.Visibility = avail ? Visibility.Collapsed : Visibility.Visible;
                 _nativeTempButton.Content = PawnIoInstalled() ? "启用原生温度…" : "安装 PawnIO…";
+            }
+        }
+
+        private static bool TemperatureSlaveFresh() => DesktopBar.Services.TemperatureSlave.IsFresh;
+
+        /// <summary>
+        /// 周期刷新温度状态:状态行只在构建时评估一次会永远停留旧值;
+        /// 每 2 秒刷新一次(共享内存检测很轻),每 15 秒才真正查一次 schtasks(进程启动较重)。
+        /// </summary>
+        private void EnsureTempStatusTimer()
+        {
+            if (_tempStatusTimer != null) return;
+            _tempStatusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _tempStatusTimer.Tick += (s, e) =>
+            {
+                if (_pawnInstalling || _nativeTempStatus == null) return;
+                long now = Environment.TickCount64;
+                if (now - _lastTaskProbeTick > 15000)
+                {
+                    _lastTaskProbeTick = now;
+                    System.Threading.Tasks.Task.Run(ProbeSlaveTask);
+                    // 任务存在但从属没有数据时,主动 /Run 拉起一次(任务是本用户创建的,可直接运行)。
+                    if (_lastTaskExists && _lastTaskPathOk && !DesktopBar.Services.TemperatureSlave.IsFresh
+                        && !DesktopBar.Services.PawnIoTctl.IsAvailable)
+                        System.Threading.Tasks.Task.Run(RunSlaveTaskOnce);
+                }
+                RefreshNativeTempStatus();
+            };
+            _tempStatusTimer.Start();
+        }
+
+        internal static (bool exists, bool pathOk) QuerySlaveTask()
+        {
+            try
+            {
+                // 用 /XML 而非 /V 列表:列表输出会把长值按宽度折行,路径被拆开导致误判;
+                // XML 的 <Command> 是完整单行。
+                var psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe",
+                    "/Query /TN YukiDeskTctlSlave /XML")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                string output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(5000);
+                if (p.ExitCode != 0) return (false, false);
+                // 校验任务指向的命令行仍包含当前 exe 路径,防止 YukiDesk 换目录后任务指向旧版本。
+                string exe = Environment.ProcessPath ?? "";
+                bool ok = string.IsNullOrEmpty(exe) || output.IndexOf(exe.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) >= 0;
+                return (true, ok);
+            }
+            catch { return (false, false); }
+        }
+
+        private void ProbeSlaveTask()
+        {
+            var (exists, pathOk) = QuerySlaveTask();
+            _lastTaskExists = exists;
+            _lastTaskPathOk = pathOk;
+        }
+
+        internal static void RunSlaveTaskOnce()
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe", "/Run /TN YukiDeskTctlSlave")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                p?.WaitForExit(5000);
+            }
+            catch (Exception ex) { App.Log("拉起温度从属任务失败: " + ex.Message); }
+        }
+
+        /// <summary>停用原生温度:删除登录计划任务(用户自建任务可直接删,失败才请求提权重试)。</summary>
+        private async void DisableNativeTemp()
+        {
+            if (_pawnInstalling) return;
+            _pawnInstalling = true;
+            var btn = _nativeTempDisableButton;
+            try
+            {
+                if (btn != null) btn.IsEnabled = false;
+                bool deleted = await System.Threading.Tasks.Task.Run(() => RunSchtasksDelete(false));
+                if (!deleted)
+                    deleted = await System.Threading.Tasks.Task.Run(() => RunSchtasksDelete(true));
+                _lastTaskExists = !deleted;
+                if (deleted) App.Log("已停用原生 CPU 温度(计划任务已删除)");
+                else ConfirmDialog.Notice("停用未完成", "计划任务删除失败,可在任务计划程序中手动删除 YukiDeskTctlSlave。");
+            }
+            finally
+            {
+                _pawnInstalling = false;
+                if (btn != null) btn.IsEnabled = true;
+                RefreshNativeTempStatus();
+            }
+
+            static bool RunSchtasksDelete(bool elevate)
+            {
+                try
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe", "/Delete /F /TN YukiDeskTctlSlave")
+                    {
+                        UseShellExecute = elevate
+                    };
+                    if (elevate) psi.Verb = "runas";
+                    using var p = System.Diagnostics.Process.Start(psi);
+                    p?.WaitForExit(8000);
+                    return p == null || p.ExitCode == 0;
+                }
+                catch { return false; }
             }
         }
 
@@ -986,24 +1170,39 @@ namespace DesktopBar
                         data = await http.GetByteArrayAsync(url);
                     if (data == null || data.Length < 100 * 1024) throw new IOException("下载内容异常");
                     File.WriteAllBytes(setup, data);
+                    // 提权执行前验证 Authenticode 签名可信:防止被替换/篡改的二进制借 UAC 执行。
+                    if (!Interop.NativeMethods.VerifyAuthenticodeSignature(setup))
+                    {
+                        try { File.Delete(setup); } catch { }
+                        throw new IOException("下载的 PawnIO 安装器没有有效的数字签名,已中止安装。");
+                    }
                 }
 
                 RefreshNativeTempStatus(needDownload ? "请在弹出的窗口中完成安装…" : "请在授权窗口点击“是”…");
-                string script = System.IO.Path.Combine(Path.GetTempPath(), "yukidesk-tctl-setup.cmd");
+                // 随机文件名 + 执行后删除:固定名脚本在写入与提权执行之间存在被替换的窗口。
+                string script = System.IO.Path.Combine(Path.GetTempPath(),
+                    "yukidesk-" + System.IO.Path.GetRandomFileName() + ".cmd");
+                // cmd 按系统 OEM 代码页解析批处理:默认 UTF-8 无 BOM 在中文用户名路径下会乱码。
+                var oem = System.Text.Encoding.GetEncoding(
+                    System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
                 string content = "@echo off\r\n";
                 if (needDownload) content += "\"" + setup + "\"\r\n";
                 content += "schtasks /Create /F /TN \"YukiDeskTctlSlave\" /TR \"\\\"" + exe + "\\\" --tempslave\" /SC ONLOGON /RL HIGHEST\r\n";
                 content += "schtasks /Run /TN \"YukiDeskTctlSlave\"\r\n";
-                File.WriteAllText(script, content);
+                File.WriteAllText(script, content, oem);
 
-                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
+                int exitCode = -1;
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/D /c \"" + script + "\"")
                 {
                     UseShellExecute = true,
                     Verb = "runas" // 一次 UAC
                 };
                 var proc = System.Diagnostics.Process.Start(psi);
                 if (proc != null)
-                    await System.Threading.Tasks.Task.Run(() => { try { proc.WaitForExit(); } catch { } });
+                {
+                    await System.Threading.Tasks.Task.Run(() => { try { proc.WaitForExit(); exitCode = proc.ExitCode; } catch { } });
+                }
+                try { File.Delete(script); } catch { }
 
                 // 从属任务启动后约 2 秒发布共享内存,主循环 1 秒采样一次;留足刷新余量。
                 for (int i = 0; i < 6; i++)
@@ -1011,9 +1210,14 @@ namespace DesktopBar
                     await System.Threading.Tasks.Task.Delay(800);
                     if (DesktopBar.Services.TemperatureSlave.IsFresh) break;
                 }
+                // 安装完成立刻重新探测 PawnIO 通道,不必等 30 秒退避期。
+                DesktopBar.Services.PawnIoTctl.InvalidateProbe();
+                ProbeSlaveTask();
                 RefreshNativeTempStatus();
                 if (!DesktopBar.Services.TemperatureSlave.IsFresh && !DesktopBar.Services.PawnIoTctl.IsAvailable)
-                    RefreshNativeTempStatus("已取消或尚未生效,可再次点击重试");
+                    RefreshNativeTempStatus(exitCode != 0
+                        ? "未完成(授权窗口被取消或被策略拦截),可再次点击重试"
+                        : "已取消或尚未生效,可再次点击重试");
             }
             catch (Exception ex)
             {
@@ -1068,13 +1272,28 @@ namespace DesktopBar
                 Save();
             }));
             b1.Children.Add(MakeHint("通过当前用户注册表 Run 键实现,登录系统后立即启动,无等待。"));
-            b1.Children.Add(Row("悬停关闭", NumberSlider(80, 800, S.HoverCloseDelayMs, "ms", v => { S.HoverCloseDelayMs = (int)Math.Round(v); Save(); })));
-            b1.Children.Add(Row("动画时长", NumberSlider(80, 500, S.AnimationDurationMs, "ms", v => { S.AnimationDurationMs = (int)Math.Round(v); Save(); })));
+            // 开关初值取注册表实况而非内存值:用户手删 Run 键/被组策略拦截时两者会脱节;
+            // 写入失败时回读校正并把开关拨回去,不让 UI 显示一个没生效的状态。
+            ToggleButton autostartToggle = null;
+            b1.Children.Add(ToggleRow("开机自动启动", AutoStartService.IsEnabled(), v =>
+            {
+                bool ok = AutoStartService.Set(v);
+                S.AutoStart = AutoStartService.IsEnabled();
+                Save();
+                if (!ok)
+                {
+                    ConfirmDialog.Notice("设置未生效",
+                        "开机自动启动未能写入注册表(可能被组策略或安全软件拦截)。");
+                    autostartToggle?.SetCurrentValue(ToggleButton.IsCheckedProperty, S.AutoStart);
+                }
+            }, onCreated: t => autostartToggle = t));
+            b1.Children.Add(Row("悬停关闭", NumberSlider(80, 2000, S.HoverCloseDelayMs, "ms", v => { S.HoverCloseDelayMs = (int)Math.Round(v); Save(); })));
+            b1.Children.Add(Row("动画时长", NumberSlider(80, 1200, S.AnimationDurationMs, "ms", v => { S.AnimationDurationMs = (int)Math.Round(v); Save(); })));
             GeneralHost.Children.Add(card1);
 
             var cardSpace = Card("桌面空间", null, out var bs);
             bs.Children.Add(ToggleRow("为顶栏预留桌面空间", S.ReserveDesktopSpace, v => { S.ReserveDesktopSpace = v; DesktopSpaceService.Apply(S); Save(); }));
-            bs.Children.Add(Row("预留高度", NumberSlider(38, 100, S.DesktopSpaceHeight, "px", v => { S.DesktopSpaceHeight = (int)Math.Round(v); if (S.ReserveDesktopSpace) DesktopSpaceService.Apply(S); Save(); })));
+            bs.Children.Add(Row("预留高度", NumberSlider(38, 160, S.DesktopSpaceHeight, "px", v => { S.DesktopSpaceHeight = (int)Math.Round(v); if (S.ReserveDesktopSpace) DesktopSpaceService.Apply(S); Save(); })));
             GeneralHost.Children.Add(cardSpace);
 
             var card2 = Card("数据", null, out var b2);

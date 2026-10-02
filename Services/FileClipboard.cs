@@ -55,7 +55,12 @@ namespace DesktopBar.Services
                 if (list.Count == 0) return;
                 SetClipboardData(list, effect, null);
             }
-            catch (Exception ex) { App.Log("写入剪贴板失败: " + ex.Message); }
+            catch (Exception ex)
+            {
+                App.Log("写入剪贴板失败: " + ex.Message);
+                // 剪贴板被占用等场景用户点复制/剪切毫无反应,必须给可见反馈。
+                DesktopBar.UI.ConfirmDialog.Notice("复制失败", "无法写入剪贴板,可能有其他程序正在占用,请重试。");
+            }
         }
 
         public static bool WriteTemporaryPath(string path)
@@ -112,7 +117,9 @@ namespace DesktopBar.Services
             string destination = UniqueDest(name, root);
             try
             {
-                CopyPath(sourceFull, destination);
+                int skipped = CopyPath(sourceFull, destination);
+                if (skipped > 0)
+                    throw new IOException("项目包含 " + skipped + " 个无法复制的链接文件夹(junction/符号链接)。");
                 return destination;
             }
             catch
@@ -120,6 +127,35 @@ namespace DesktopBar.Services
                 try { DeletePath(destination); } catch { }
                 throw;
             }
+        }
+
+        /// <summary>
+        /// 启动时清扫上次会话残留在 %TEMP%\YukiDeskClipboard 的临时副本:
+        /// 当前剪贴板仍引用的保留(跨会话粘贴依赖临时文件存活),其余删除。
+        /// 必须在 UI 线程调用(读剪贴板)。
+        /// </summary>
+        public static void CleanupStaleTempCopies()
+        {
+            try
+            {
+                string root = Path.Combine(Path.GetTempPath(), "YukiDeskClipboard");
+                if (!Directory.Exists(root)) return;
+                var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    if (Clipboard.ContainsFileDropList())
+                        foreach (string p in Clipboard.GetFileDropList())
+                            keep.Add(Path.GetFullPath(p));
+                }
+                catch { }
+                foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+                {
+                    if (keep.Contains(Path.GetFullPath(entry))) continue;
+                    try { ForceDelete(entry); }
+                    catch (Exception ex) { App.Log("清扫临时剪贴板副本失败: " + ex.Message); }
+                }
+            }
+            catch (Exception ex) { App.Log("清扫临时剪贴板目录失败: " + ex.Message); }
         }
 
         public static void CleanupTemporaryClipboardPaths()
@@ -259,8 +295,13 @@ namespace DesktopBar.Services
                     if (SameVolume(sourceFull, destinationRoot)) Directory.Move(sourceFull, dest);
                     else
                     {
-                        CopyDir(sourceFull, dest);
-                        Directory.Delete(sourceFull, true);
+                        int skipped = CopyDir(sourceFull, dest);
+                        if (skipped > 0)
+                        {
+                            // 跨卷移动遇到复制不了的链接目录时绝不能删源,否则数据就地丢失。
+                            throw new IOException("源包含 " + skipped + " 个无法复制的链接文件夹,已取消移动以保护数据。");
+                        }
+                        ForceDelete(sourceFull);
                     }
                 }
                 return true;
@@ -310,6 +351,7 @@ namespace DesktopBar.Services
 
                 string targetDir = Path.GetDirectoryName(targetFull);
                 string name = Path.GetFileName(targetFull);
+                SweepStaleStaging(targetDir);
                 temp = Path.Combine(targetDir, ".yukidesk-staging-"
                     + Guid.NewGuid().ToString("N") + "-" + name);
                 bool sameVolume = SameVolume(sourceFull, targetDir);
@@ -320,7 +362,15 @@ namespace DesktopBar.Services
                 }
                 else
                 {
-                    CopyPath(sourceFull, temp);
+                    int skipped = CopyPath(sourceFull, temp);
+                    if (skipped > 0)
+                    {
+                        // 预检失败直接中止:旧项目尚未移走,不会出现"替换一半"的状态。
+                        error = "源项目包含 " + skipped + " 个无法复制的链接文件夹,替换已取消。";
+                        try { DeletePath(temp); } catch { }
+                        temp = null;
+                        return false;
+                    }
                 }
 
                 if (removeTarget == null || !removeTarget())
@@ -375,10 +425,73 @@ namespace DesktopBar.Services
             else throw new FileNotFoundException("源项目不存在", source);
         }
 
-        private static void DeletePath(string path)
+        /// <summary>清理目标目录里上次操作残存的 .yukidesk-staging-* 暂存项(1 小时以上才算陈旧)。</summary>
+        private static void SweepStaleStaging(string targetDir)
         {
-            if (File.Exists(path)) File.Delete(path);
-            else if (Directory.Exists(path)) Directory.Delete(path, true);
+            if (string.IsNullOrEmpty(targetDir) || !Directory.Exists(targetDir)) return;
+            try
+            {
+                foreach (var stale in new DirectoryInfo(targetDir).EnumerateFileSystemInfos(".yukidesk-staging-*"))
+                {
+                    try
+                    {
+                        var created = File.GetCreationTimeUtc(stale.FullName);
+                        var written = File.GetLastWriteTimeUtc(stale.FullName);
+                        var stamp = written > created ? written : created;
+                        if (DateTime.UtcNow - stamp < TimeSpan.FromHours(1))
+                            continue;
+                        ForceDelete(stale.FullName);
+                        App.Log("已清理残留暂存项: " + stale.Name);
+                    }
+                    catch (Exception ex) { App.Log("清理残留暂存项失败: " + ex.Message); }
+                }
+            }
+            catch { }
+        }
+
+        private static void DeletePath(string path) => ForceDelete(path);
+
+        /// <summary>
+        /// 清属性后删除:.NET 的 File/Directory.Delete 遇只读项直接抛 UnauthorizedAccessException,
+        /// Explorer 会自动清只读位,这里对齐该行为,避免一个只读文件让整次删除/移动失败。
+        /// </summary>
+        public static void ForceDelete(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            if (File.Exists(path))
+            {
+                try { File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly); } catch { }
+                File.Delete(path);
+                return;
+            }
+            if (Directory.Exists(path))
+            {
+                var stack = new Stack<string>();
+                stack.Push(path);
+                while (stack.Count > 0)
+                {
+                    string dir = stack.Pop();
+                    try { File.SetAttributes(dir, File.GetAttributes(dir) & ~FileAttributes.ReadOnly); } catch { }
+                    try
+                    {
+                        foreach (var f in Directory.EnumerateFiles(dir))
+                        {
+                            try { File.SetAttributes(f, File.GetAttributes(f) & ~FileAttributes.ReadOnly); } catch { }
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        foreach (var d in Directory.EnumerateDirectories(dir))
+                        {
+                            try { File.SetAttributes(d, File.GetAttributes(d) & ~FileAttributes.ReadOnly); } catch { }
+                            stack.Push(d);
+                        }
+                    }
+                    catch { }
+                }
+                Directory.Delete(path, true);
+            }
         }
 
         private static void RestoreStagedSource(string source, string temp, bool stagedByMove)
@@ -407,34 +520,40 @@ namespace DesktopBar.Services
             }
         }
 
-        public static void CopyPath(string src, string dest)
+        /// <summary>复制文件或目录树;返回被跳过的链接目录数量(0 = 完整复制)。</summary>
+        public static int CopyPath(string src, string dest)
         {
-            if (File.Exists(src)) File.Copy(src, dest);
-            else CopyDir(src, dest);
+            if (File.Exists(src)) { File.Copy(src, dest); return 0; }
+            return CopyDir(src, dest);
         }
 
-        public static void CopyDir(string srcDir, string dstDir)
+        public static int CopyDir(string srcDir, string dstDir)
         {
             if (IsInside(srcDir, dstDir))
                 throw new IOException("目标目录位于源目录内部。");
+            int skipped = 0;
             var pending = new Stack<(string Src, string Dst)>();
             pending.Push((srcDir, dstDir));
             while (pending.Count > 0)
             {
                 var (src, dst) = pending.Pop();
-                if (IsReparsePoint(src)) continue;
+                if (IsReparsePoint(src)) { skipped++; continue; }
                 Directory.CreateDirectory(dst);
                 foreach (var file in Directory.EnumerateFiles(src))
                 {
-                    if (!IsReparsePoint(file))
-                        File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+                    // 文件即使是 reparse point(OneDrive 占位/符号链接)也照常复制——
+                    // File.Copy 会取到实体内容或触发云占位水合;跳过反而造成"复制完成但缺文件"。
+                    File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
                 }
                 foreach (var sub in Directory.EnumerateDirectories(src))
                 {
+                    // 目录链接(junction/符号链接)必须跳过,否则环状链接会无限递归;计数并上报。
                     if (!IsReparsePoint(sub))
                         pending.Push((sub, Path.Combine(dst, Path.GetFileName(sub))));
+                    else skipped++;
                 }
             }
+            return skipped;
         }
 
         private static bool IsInside(string source, string candidate)

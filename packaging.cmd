@@ -52,7 +52,29 @@ for %%A in (x64 arm64) do (
     )
 )
 
+rem 只保留当前版本资产:installers\ 里历史安装包堆积会让人工上传时拿错旧版本。
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Get-Item 'publish\win-x64\YukiDesk.exe').VersionInfo.FileVersion"') do set "VER=%%V"
+if not defined VER (
+    echo [ERROR] 无法读取版本号,跳过 installers 清理与校验和生成
+    exit /b 1
+)
+echo ========== Clean stale installers (keep %VER%) ==========
+for %%F in ("installers\YukiDesk-Setup-*.exe") do (
+    echo "%%~nxF" | findstr /C:"-%VER%.exe" >nul || del /f /q "%%F"
+)
+
+rem 生成 SHA256SUMS 清单:更新器会下载同版本 SHA256SUMS-<ver>.txt 校验安装包完整性。
+set "SUMS=installers\SHA256SUMS-%VER%.txt"
+if exist "%SUMS%" del /f /q "%SUMS%"
+for %%F in ("installers\YukiDesk-Setup-%VER%.exe" "installers\YukiDesk-Setup-%VER%.0.exe") do (
+    if exist "%%~fF" for /f "tokens=1" %%H in ('powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '%%~fF').Hash.ToLower()"') do >>"%SUMS%" echo %%H  %%~nxF
+)
+
 echo.
-echo Done. Installers:
+echo Done. Assets for release:
 dir /b "installers\YukiDesk-Setup-*.exe"
+if exist "%SUMS%" (
+    type "%SUMS%"
+    echo Upload the SHA256SUMS-%VER%.txt above together with the 4 installers.
+)
 endlocal
