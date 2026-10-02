@@ -897,6 +897,35 @@ namespace DesktopBar
                 v => { S.ShowMonitorMemory = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
             body.Children.Add(ToggleRow("网络上下行", S.ShowMonitorNetwork,
                 v => { S.ShowMonitorNetwork = v; Save(); App.Bar?.ApplyModuleVisibility(); }));
+
+            // 原生 CPU 温度(AMD 平台):经 PawnIO 读取真 Tctl;未装时回落 SoC/热区传感器。
+            if (DesktopBar.Services.PerfService.CpuIsAmd)
+            {
+                _nativeTempStatus = new TextBlock
+                {
+                    Text = "未启用",
+                    FontSize = 12.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                _nativeTempStatus.SetResourceReference(TextElement.ForegroundProperty, "SettingsLabelBrush");
+                _nativeTempButton = new Button
+                {
+                    Content = "安装 PawnIO…",
+                    Style = (Style)FindResource("Btn"),
+                    Margin = new Thickness(10, 0, 0, 0)
+                };
+                _nativeTempButton.Click += (s, e) => InstallPawnIO();
+                var nativeHost = new StackPanel { Orientation = Orientation.Horizontal };
+                nativeHost.Children.Add(_nativeTempStatus);
+                nativeHost.Children.Add(_nativeTempButton);
+                body.Children.Add(Row("原生 CPU 温度", nativeHost));
+                body.Children.Add(MakeHint("开启后 CPU 胶囊温度显示处理器原生 Tctl 核心温度(与 AIDA64/HWiNFO 同源)。"
+                    + "PawnIO 设备仅管理员可访问,因此启用时会创建一个登录时以最高权限静默启动的温度从属任务"
+                    + "(隐藏进程,读取后经共享内存交给主程序,主程序退出时自动结束);首次启用只需一次管理员授权。"
+                    + "未启用时显示 CPU 封装内 SoC 温度(满载时比 Tctl 略低)。"));
+                RefreshNativeTempStatus();
+            }
+
             body.Children.Add(MakeHint("CPU、GPU、内存、网络胶囊位于音频频谱左侧;采样只在任一胶囊可见时进行。"
                 + "GPU 占用率来自系统 GPU 引擎计数器,多显卡时可在上方选择要监测的 GPU。"));
             ModulesHost.Children.Add(card);
@@ -907,6 +936,100 @@ namespace DesktopBar
         private ComboBox _gpuCombo;
         private bool _updatingGpuCombo;
         private int _gpuLoadVersion;
+        private TextBlock _nativeTempStatus;
+        private Button _nativeTempButton;
+        private bool _pawnInstalling;
+
+        private void RefreshNativeTempStatus(string note = null)
+        {
+            if (_nativeTempStatus == null) return;
+            bool avail = DesktopBar.Services.PawnIoTctl.IsAvailable || DesktopBar.Services.TemperatureSlave.IsFresh;
+            _nativeTempStatus.Text = avail ? "已启用(Tctl)" : (note ?? "未启用");
+            if (_nativeTempButton != null && !_pawnInstalling)
+            {
+                _nativeTempButton.Visibility = avail ? Visibility.Collapsed : Visibility.Visible;
+                _nativeTempButton.Content = PawnIoInstalled() ? "启用原生温度…" : "安装 PawnIO…";
+            }
+        }
+
+        private static bool PawnIoInstalled()
+        {
+            try
+            {
+                return File.Exists(System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PawnIO", "PawnIOLib.dll"));
+            }
+            catch { return false; }
+        }
+
+        private async void InstallPawnIO()
+        {
+            if (_pawnInstalling) return;
+            _pawnInstalling = true;
+            var btn = _nativeTempButton;
+            try
+            {
+                if (btn != null) btn.IsEnabled = false;
+                string exe = Environment.ProcessPath;
+                if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe)) throw new FileNotFoundException("无法定位 YukiDesk.exe");
+
+                // 一次性提升的批处理:未装则先跑 PawnIO 安装器(同一管理员令牌,不再弹 UAC),
+                // 随后创建"登录时以最高权限启动温度从属进程"的计划任务并立即运行一次。
+                bool needDownload = !PawnIoInstalled();
+                string setup = System.IO.Path.Combine(Path.GetTempPath(), "PawnIO_setup.exe");
+                if (needDownload)
+                {
+                    RefreshNativeTempStatus("正在下载 PawnIO…");
+                    const string url = "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe";
+                    byte[] data;
+                    using (var http = new System.Net.Http.HttpClient())
+                        data = await http.GetByteArrayAsync(url);
+                    if (data == null || data.Length < 100 * 1024) throw new IOException("下载内容异常");
+                    File.WriteAllBytes(setup, data);
+                }
+
+                RefreshNativeTempStatus(needDownload ? "请在弹出的窗口中完成安装…" : "请在授权窗口点击“是”…");
+                string script = System.IO.Path.Combine(Path.GetTempPath(), "yukidesk-tctl-setup.cmd");
+                string content = "@echo off\r\n";
+                if (needDownload) content += "\"" + setup + "\"\r\n";
+                content += "schtasks /Create /F /TN \"YukiDeskTctlSlave\" /TR \"\\\"" + exe + "\\\" --tempslave\" /SC ONLOGON /RL HIGHEST\r\n";
+                content += "schtasks /Run /TN \"YukiDeskTctlSlave\"\r\n";
+                File.WriteAllText(script, content);
+
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
+                {
+                    UseShellExecute = true,
+                    Verb = "runas" // 一次 UAC
+                };
+                var proc = System.Diagnostics.Process.Start(psi);
+                if (proc != null)
+                    await System.Threading.Tasks.Task.Run(() => { try { proc.WaitForExit(); } catch { } });
+
+                // 从属任务启动后约 2 秒发布共享内存,主循环 1 秒采样一次;留足刷新余量。
+                for (int i = 0; i < 6; i++)
+                {
+                    await System.Threading.Tasks.Task.Delay(800);
+                    if (DesktopBar.Services.TemperatureSlave.IsFresh) break;
+                }
+                RefreshNativeTempStatus();
+                if (!DesktopBar.Services.TemperatureSlave.IsFresh && !DesktopBar.Services.PawnIoTctl.IsAvailable)
+                    RefreshNativeTempStatus("已取消或尚未生效,可再次点击重试");
+            }
+            catch (Exception ex)
+            {
+                RefreshNativeTempStatus("未完成: " + ex.Message);
+            }
+            finally
+            {
+                _pawnInstalling = false;
+                if (btn != null)
+                {
+                    btn.IsEnabled = true;
+                    if (!DesktopBar.Services.PawnIoTctl.IsAvailable && !DesktopBar.Services.TemperatureSlave.IsFresh)
+                        btn.Visibility = Visibility.Visible;
+                }
+            }
+        }
 
         private async void LoadGpuOptions()
         {

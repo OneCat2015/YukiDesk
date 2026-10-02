@@ -18,4 +18,9 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- AMD Zen SMN 读取模块(LGPL-2.1,取自 LibreHardwareMonitor 资源,由 PawnIO 官方签名),供 PawnIoTctl 加载 -->
+    <EmbeddedResource Include="Resources\PawnIo\AMDFamily17.bin" />
+  </ItemGroup>
+
 </Project>

@@ -51,6 +51,13 @@ namespace DesktopBar
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            // 温度从属模式:计划任务以最高权限启动,读原生 Tctl 写共享内存,不建互斥体/托盘/主窗。
+            if (e.Args != null && Array.IndexOf(e.Args, "--tempslave") >= 0)
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Services.TemperatureSlave.Run(() => Dispatcher.BeginInvoke(new Action(Shutdown)));
+                return;
+            }
             _mutex = new Mutex(true, "YukiDesk_SingleInstance_Mutex", out bool created);
             if (!created) { Shutdown(); return; }
             DispatcherUnhandledException += (s, args) => { Log("未处理异常: " + args.Exception); args.Handled = true; };

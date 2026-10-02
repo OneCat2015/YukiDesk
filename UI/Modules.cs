@@ -1776,11 +1776,14 @@ namespace DesktopBar.UI
     /// <summary>性能监测胶囊指标。</summary>
     public enum PerfMetric { Cpu, Gpu, Memory, Network }
 
-    /// <summary>性能监测胶囊:无展开页,数值由 PerfService 每秒采样刷新;四个指标各自独立显隐。</summary>
+    /// <summary>性能监测胶囊:数值由 PerfService 每秒采样刷新;四个指标各自独立显隐。
+    /// 悬停自动展开数据页:CPU/GPU 显示占用、温度、频率,内存显示占用与容量频率,网络显示上下行速率。</summary>
     public class PerfModule : ModuleBase
     {
         private readonly PerfMetric _metric;
         private readonly TextBlock _value;
+        private readonly Dictionary<string, TextBlock> _rows = new Dictionary<string, TextBlock>();
+        private TextBlock _panelTitle;
         private bool _active;
         private bool _disposed;
 
@@ -1813,6 +1816,7 @@ namespace DesktopBar.UI
             Pill.Width = (metric == PerfMetric.Network ? 88 : 58) * s;
             Pill.ToolTip = Caption;
 
+            BuildHoverPanel();
             IsVisibleChanged += (s2, e2) => SetActive(IsVisible);
             Loaded += (s2, e2) => SetActive(IsVisible);
             Unloaded += (s2, e2) => SetActive(false);
@@ -1826,8 +1830,71 @@ namespace DesktopBar.UI
             _ => "网络上下行"
         };
 
-        protected override bool HasPanel => false;
-        protected override bool HoverOpensPanel => false;
+        protected override bool HasPanel => true;
+        protected override bool HoverOpensPanel => true;
+        protected override bool CenterPanelOnPill => true;
+
+        // ---------- 悬停展开页 ----------
+
+        private void BuildHoverPanel()
+        {
+            double s = Ui.Scale;
+            double width = _metric switch
+            {
+                PerfMetric.Gpu => 210,
+                PerfMetric.Memory => 170,
+                _ => 150
+            };
+            var body = new StackPanel { Width = width * s };
+            string title = _metric == PerfMetric.Memory ? "内存" : _metric == PerfMetric.Network ? "网络" : _metric == PerfMetric.Cpu ? "CPU" : "GPU";
+            _panelTitle = MakeText(title);
+            _panelTitle.FontSize = 14 * s;
+            _panelTitle.FontWeight = FontWeights.SemiBold;
+            _panelTitle.Margin = new Thickness(2, 0, 2, 6 * s);
+            body.Children.Add(_panelTitle);
+
+            switch (_metric)
+            {
+                case PerfMetric.Cpu:
+                    AddRow(body, "占用");
+                    AddRow(body, "温度");
+                    AddRow(body, "频率");
+                    break;
+                case PerfMetric.Gpu:
+                    AddRow(body, "型号");
+                    AddRow(body, "占用");
+                    AddRow(body, "温度");
+                    AddRow(body, "频率");
+                    break;
+                case PerfMetric.Memory:
+                    AddRow(body, "占用");
+                    AddRow(body, "已用");
+                    AddRow(body, "容量");
+                    AddRow(body, "频率");
+                    break;
+                default:
+                    AddRow(body, "下行");
+                    AddRow(body, "上行");
+                    break;
+            }
+            Panel.Child = body;
+        }
+
+        private TextBlock AddRow(StackPanel body, string label)
+        {
+            double s = Ui.Scale;
+            var row = new Grid { Margin = new Thickness(2, 2 * s, 2, 2 * s) };
+            var lab = MakeText(label);
+            lab.Opacity = 0.72;
+            row.Children.Add(lab);
+            var val = MakeText("--");
+            val.HorizontalAlignment = HorizontalAlignment.Right;
+            val.TextTrimming = TextTrimming.CharacterEllipsis;
+            row.Children.Add(val);
+            body.Children.Add(row);
+            _rows[label] = val;
+            return val;
+        }
 
         private void SetActive(bool active)
         {
@@ -1870,6 +1937,9 @@ namespace DesktopBar.UI
                     Pill.ToolTip = Caption + (sample.CpuPercent >= 0
                         ? " — " + Math.Round(sample.CpuPercent) + "%"
                         : "");
+                    SetRow("占用", FmtPercent(sample.CpuPercent));
+                    SetRow("温度", FmtTemp(sample.CpuTempC));
+                    SetRow("频率", FmtFreq(sample.CpuFreqMhz));
                     break;
                 case PerfMetric.Gpu:
                     var gpu = PickGpu(sample.Gpus);
@@ -1877,6 +1947,10 @@ namespace DesktopBar.UI
                     Pill.ToolTip = gpu == null
                         ? Caption
                         : gpu.Name + (gpu.UtilPercent >= 0 ? " — " + Math.Round(gpu.UtilPercent) + "%" : "");
+                    SetRow("型号", gpu == null ? "--" : gpu.Name);
+                    SetRow("占用", gpu == null ? "--" : FmtPercent(gpu.UtilPercent));
+                    SetRow("温度", FmtTemp(gpu == null ? -1 : gpu.TempC));
+                    SetRow("频率", FmtFreq(gpu == null ? -1 : gpu.ClockMhz));
                     break;
                 case PerfMetric.Memory:
                     if (sample.MemTotalBytes <= 0)
@@ -1891,6 +1965,12 @@ namespace DesktopBar.UI
                         Pill.ToolTip = "内存 已用 " + FmtGb(sample.MemUsedBytes) + " / "
                             + FmtGb(sample.MemTotalBytes) + " (" + Math.Round(percent) + "%)";
                     }
+                    SetRow("占用", sample.MemTotalBytes <= 0
+                        ? "--"
+                        : FmtPercent(100.0 * sample.MemUsedBytes / sample.MemTotalBytes));
+                    SetRow("已用", sample.MemTotalBytes <= 0 ? "--" : FmtGb(sample.MemUsedBytes) + " GB");
+                    SetRow("容量", sample.MemTotalBytes <= 0 ? "--" : FmtGb(sample.MemTotalBytes) + " GB");
+                    SetRow("频率", sample.MemSpeedMts > 0 ? Math.Round(sample.MemSpeedMts) + " MT/s" : "--");
                     break;
                 default:
                     if (sample.NetUpBps < 0 && sample.NetDownBps < 0)
@@ -1904,8 +1984,24 @@ namespace DesktopBar.UI
                         Pill.ToolTip = "网络 下行 " + FmtSpeedLong(sample.NetDownBps) + "/s,上行 "
                             + FmtSpeedLong(sample.NetUpBps) + "/s";
                     }
+                    SetRow("下行", sample.NetDownBps < 0 ? "--" : FmtSpeedLong(sample.NetDownBps) + "/s");
+                    SetRow("上行", sample.NetUpBps < 0 ? "--" : FmtSpeedLong(sample.NetUpBps) + "/s");
                     break;
             }
+        }
+
+        private void SetRow(string label, string text)
+        {
+            if (_rows.TryGetValue(label, out var tb)) tb.Text = text;
+        }
+
+        private static string FmtTemp(double c)
+            => c < 0 ? "--" : Math.Round(c) + "°C";
+
+        private static string FmtFreq(double mhz)
+        {
+            if (mhz <= 0) return "--";
+            return mhz >= 1000 ? (mhz / 1000).ToString("0.00") + " GHz" : Math.Round(mhz) + " MHz";
         }
 
         private static GpuAdapterInfo PickGpu(List<GpuAdapterInfo> gpus)
