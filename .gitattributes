@@ -1,0 +1,4 @@
+# cmd.exe silently misparses LF-only batch files; pin Windows scripts to CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.iss text eol=crlf

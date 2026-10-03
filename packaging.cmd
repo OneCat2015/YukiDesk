@@ -4,6 +4,7 @@ rem   YukiDesk-Setup-<arch>-full-<ver>.exe  self-contained (bundles .NET 8 runti
 rem   YukiDesk-Setup-<arch>-slim-<ver>.exe  framework-dependent (needs .NET 8 Desktop Runtime)
 rem for arch = x64 / arm64. Output goes to installers\.
 rem Requirements: .NET 8 SDK and Inno Setup 6 (winget install JRSoftware.InnoSetup).
+rem NOTE: keep this file ASCII-only and CRLF (cmd.exe misparses LF-only batch files).
 setlocal
 cd /d "%~dp0"
 
@@ -52,22 +53,26 @@ for %%A in (x64 arm64) do (
     )
 )
 
-rem 只保留当前版本资产:installers\ 里历史安装包堆积会让人工上传时拿错旧版本。
-for /f "delims=" %%V in ('powershell -NoProfile -Command "(Get-Item 'publish\win-x64\YukiDesk.exe').VersionInfo.FileVersion"') do set "VER=%%V"
+rem Read the packaged FileVersion. Written to a temp file and read with set /p
+rem because nested quotes inside for /f are unreliable in cmd.exe.
+powershell -NoProfile -Command "(Get-Item 'publish\win-x64\YukiDesk.exe').VersionInfo.FileVersion | Out-File -Encoding ascii '%TEMP%\yukidesk-ver.tmp'" 2>nul
+set /p VER=<"%TEMP%\yukidesk-ver.tmp"
+del /f /q "%TEMP%\yukidesk-ver.tmp" 2>nul
 if not defined VER (
-    echo [ERROR] 无法读取版本号,跳过 installers 清理与校验和生成
+    echo [ERROR] cannot read version, skip installer cleanup and checksum generation
     exit /b 1
 )
-echo ========== Clean stale installers (keep %VER%) ==========
-for %%F in ("installers\YukiDesk-Setup-*.exe") do (
-    echo "%%~nxF" | findstr /C:"-%VER%.exe" >nul || del /f /q "%%F"
-)
 
-rem 生成 SHA256SUMS 清单:更新器会下载同版本 SHA256SUMS-<ver>.txt 校验安装包完整性。
+echo ========== Clean stale installers (keep %VER%) ==========
+rem Keep only current-version assets so manual upload cannot pick up a stale installer.
+powershell -NoProfile -Command "Get-ChildItem 'installers\YukiDesk-Setup-*.exe' | Where-Object { $_.Name -notlike '*-%VER%.exe' } | Remove-Item -Force" 2>nul
+
+rem SHA256SUMS-<ver>.txt: the updater downloads this manifest to verify installer integrity.
 set "SUMS=installers\SHA256SUMS-%VER%.txt"
-if exist "%SUMS%" del /f /q "%SUMS%"
-for %%F in ("installers\YukiDesk-Setup-%VER%.exe" "installers\YukiDesk-Setup-%VER%.0.exe") do (
-    if exist "%%~fF" for /f "tokens=1" %%H in ('powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '%%~fF').Hash.ToLower()"') do >>"%SUMS%" echo %%H  %%~nxF
+powershell -NoProfile -Command "$f = Get-ChildItem 'installers\YukiDesk-Setup-*-%VER%.exe'; if (-not $f) { exit 1 }; $f | ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name } | Set-Content -Encoding Ascii '%SUMS%'"
+if errorlevel 1 (
+    echo [ERROR] no installers found for version %VER%, checksum manifest not written
+    exit /b 1
 )
 
 echo.
