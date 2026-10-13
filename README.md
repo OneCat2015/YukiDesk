@@ -21,13 +21,17 @@
 
 ![小文件夹展开](docs/screenshot-folder-panel.png)
 
-时间悬停展开:星期、日期、农历(丙午马年 七月十九):
+时间悬停展开:星期、日期、农历(丙午马年 九月初四):
 
 ![时间展开](docs/screenshot-clock.png)
 
-音乐播放器与频谱:播放音乐时自动出现,悬停展开大封面、曲名、歌手与播放控制,左侧频谱随节拍跳动,旁边是 CPU/GPU/内存/网络性能胶囊:
+音乐播放器:播放音乐时自动出现,悬停展开大封面、曲名、歌手与播放控制:
 
-![音乐播放器与性能监测](docs/screenshot-music.png)
+![音乐播放器](docs/screenshot-music.png)
+
+性能监测悬停展开:CPU/GPU 显示占用、温度、频率,内存显示占用与容量,网络显示上下行速率:
+
+![性能监测悬停详情](docs/screenshot-perf-panel.png)
 
 ## 构建与运行
 
