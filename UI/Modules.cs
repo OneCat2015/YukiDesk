@@ -298,7 +298,15 @@ namespace DesktopBar.UI
                 Minimum = 0,
                 Maximum = 1,
                 Value = initialVolume,
-                Style = (Style)Application.Current.FindResource("SliderDark")
+                Style = (Style)Application.Current.FindResource("SliderDark"),
+                // 量程只有 0..1，而 RangeBase.LargeChange 默认就是 1.0——正好等于整个量程。
+                // SliderDark 模板把整条轨道填成了 IncreaseLarge/DecreaseLarge 两个 RepeatButton，
+                // 于是点一次轨道就被 ±1.0 直接顶到 100% 或 0%（拖动滑块走 Thumb.DragDelta，不受影响，
+                // 这就是"能拖不能点"的原因）。开 IsMoveToPointEnabled 让点击直接跳到鼠标位置，
+                // 再把 LargeChange/SmallChange 缩到 2%/1%，键盘 PageUp/PageDown/方向键才可用。
+                IsMoveToPointEnabled = true,
+                LargeChange = 0.02,
+                SmallChange = 0.01
             });
             _slider.SetResourceReference(Control.BackgroundProperty, "ThemePanelControl");
             body.Children.Add(_value = MakeText(initialVolumeAvailable ? Math.Round(initialVolume * 100) + "%" : "读取失败"));
